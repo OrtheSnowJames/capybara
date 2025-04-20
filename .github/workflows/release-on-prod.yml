@@ -20,7 +20,7 @@ jobs:
       run: g++ server.cpp -o server
 
     - name: Compile client.cpp
-      run: g++ client.cpp -o client
+      run: g++ client.cpp -lraylib -o client
 
     - name: Create Release
       id: create_release
