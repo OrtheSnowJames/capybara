@@ -38,6 +38,8 @@ public:
 
     return out;
   }
+
+  Player() : x(0), y(0) {};
 };
 
 #endif
