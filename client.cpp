@@ -101,6 +101,22 @@ int main() {
 
         std::cout << "my id: " << my_id << std::endl;
         break;
+      case 2:
+        break;
+      case 3:
+        split(payload, " ", msg_split);
+        {
+          int id = std::stoi(msg_split.at(0));
+          int x = std::stoi(msg_split.at(1));
+          int y = std::stoi(msg_split.at(2));
+
+          players.insert({id, Player(x, y)});
+        }
+
+        break;
+      case 4:
+        players.erase(std::stoi(payload));
+        break;
       }
 
       packets.pop_front();

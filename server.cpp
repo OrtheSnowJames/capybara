@@ -99,6 +99,7 @@ void accept_clients(int sock) {
     }
 
     std::cout << "Assigned id " << id << " to new player.\n";
+    std::lock_guard<std::mutex> locK(players_mutex);
     players.insert({id, Player(100, 100)});
 
     std::lock_guard<std::mutex> lock(clients_mutex);
@@ -108,6 +109,15 @@ void accept_clients(int sock) {
     is_running[id] = true;
 
     std::cout << "Added client " << id << " to lists.\n";
+
+    std::ostringstream out("3\n");
+
+    out << id << " " << players.at(id).x << " " << players.at(id).y;
+
+    for (auto &[_, v] : clients)
+      send_message(out.str(), v.first);
+
+    std::cout << "Broadcasted client " << id << " joining to all clients.\n";
   }
 }
 
@@ -164,6 +174,11 @@ int main() {
         std::cout << "Erased client " << i << " from running list.\n";
         clients.erase(i);
         std::cout << "Erased client " << i << " from clients list.\n";
+
+        for (auto &[_, v] : clients)
+          send_message(std::string("4\n" + std::to_string(i)), v.first);
+        std::cout << "Broadcasted removal of client " << i
+                  << " to all clients.\n";
 
         std::cout << "Removed client " << i << std::endl;
       }
