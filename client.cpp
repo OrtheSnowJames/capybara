@@ -1,5 +1,6 @@
 #include "player.hpp"
 #include "raylib.h"
+#include "utils.hpp"
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdio>
@@ -13,6 +14,7 @@
 #include <thread>
 #include <unistd.h>
 #include <unordered_map>
+#include <vector>
 
 int sock = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -76,19 +78,25 @@ int main() {
       std::cout << "Pkt type: " << packet_type << std::endl;
       std::cout << "Payload: " << payload << std::endl;
       std::istringstream in(payload);
+      std::vector<std::string> msg_split;
 
       switch (packet_type) {
       case 0:
-        std::cout << "case 0" << std::endl;
-        int id, x, y;
-        in >> id >> x >> y;
+        split(payload, std::string(":"), msg_split);
+        for (std::string i : msg_split) {
+          if (i == std::string(""))
+            continue;
 
-        players.insert({id, Player(x, y)});
-        std::cout << "Inserted player\n";
+          std::istringstream j(i);
+          int id, x, y;
+          j >> id >> x >> y;
+
+          players.insert({id, Player(x, y)});
+          std::cout << "Inserted player " << id << '\n';
+        }
 
         break;
       case 1:
-        std::cout << "case 1" << std::endl;
         in >> my_id;
 
         std::cout << "my id: " << my_id << std::endl;
@@ -99,16 +107,13 @@ int main() {
     }
 
     if (IsKeyDown(KEY_W)) {
-      std::cout << "moving up\n";
       players.at(my_id).y -= 5;
       std::string msg("1\n");
       msg.append(std::to_string(players.at(my_id).x));
       msg.append(" ");
       msg.append(std::to_string(players.at(my_id).y));
 
-      const char *msg_str(msg.c_str());
-
-      send(sock, msg_str, msg.size(), 0);
+      send_message(msg, sock);
     }
 
     BeginDrawing();
@@ -125,7 +130,7 @@ int main() {
     EndDrawing();
   }
 
-  CloseWindow();
+  std::cout << "Closing.\n";
 
   running = false;
 
@@ -134,4 +139,6 @@ int main() {
   close(sock);
 
   recv_thread.join();
+
+  CloseWindow();
 }

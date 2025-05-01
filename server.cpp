@@ -1,4 +1,5 @@
 #include "player.hpp"
+#include "utils.hpp"
 #include <arpa/inet.h>
 #include <cstdio>
 #include <iostream>
@@ -30,19 +31,17 @@ void handle_client(int client, int id) {
   {
     std::lock_guard<std::mutex> lock(players_mutex);
     for (auto &[k, v] : players)
-      out << k << ' ' << v.x << ' ' << v.y;
+      out << ':' << k << ' ' << v.x << ' ' << v.y;
   } // unlock mutex
   std::string payload = out.str();
 
   std::string msg = "0\n" + payload;
-  const char *msg_str = msg.c_str();
 
-  send(client, msg_str, msg.size(), 0);
+  send_message(msg, client);
 
   std::string msg_id = "1\n" + std::to_string(id);
-  const char *msg_id_str = msg_id.c_str();
 
-  send(client, msg_id_str, msg_id.size(), 0);
+  send_message(msg_id, client);
 
   bool running;
   {
@@ -77,7 +76,7 @@ void handle_client(int client, int id) {
 
   {
     std::lock_guard<std::mutex> _(running_mutex);
-    is_running.erase(id);
+    is_running[id] = false;
     std::lock_guard<std::mutex> _lock(players_mutex);
     players.erase(id);
   }
@@ -98,6 +97,8 @@ void accept_clients(int sock) {
       if (id_init == id)
         break;
     }
+
+    std::cout << "Assigned id " << id << " to new player.\n";
     players.insert({id, Player(100, 100)});
 
     std::lock_guard<std::mutex> lock(clients_mutex);
@@ -105,6 +106,8 @@ void accept_clients(int sock) {
 
     std::lock_guard<std::mutex> _(running_mutex);
     is_running[id] = true;
+
+    std::cout << "Added client " << id << " to lists.\n";
   }
 }
 
@@ -134,6 +137,8 @@ int main() {
 
   std::thread(accept_clients, sock).detach();
 
+  std::cout << "Running.\n";
+
   // handle game stuff
   while (1) {
     {
@@ -151,9 +156,16 @@ int main() {
         if (clients[i].second.joinable())
           clients[i].second.join();
 
+        shutdown(clients[i].first, SHUT_RDWR);
+
         close(clients[i].first);
+        std::cout << "Erased socket for client " << i << std::endl;
         is_running.erase(i);
+        std::cout << "Erased client " << i << " from running list.\n";
         clients.erase(i);
+        std::cout << "Erased client " << i << " from clients list.\n";
+
+        std::cout << "Removed client " << i << std::endl;
       }
     }
 

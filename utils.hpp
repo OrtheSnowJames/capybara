@@ -1,8 +1,20 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include <arpa/inet.h>
+#include <iostream>
+#include <netinet/in.h>
 #include <string>
+#include <sys/socket.h>
 #include <vector>
+
+inline void send_message(std::string msg, int sock) {
+  const char *msg_str = msg.c_str();
+
+  send(sock, msg_str, msg.size(), 0);
+
+  std::cout << "Sent: " << msg << " To: " << sock << std::endl;
+}
 
 inline void split(std::string str, std::string splitBy,
                   std::vector<std::string> &tokens) {
