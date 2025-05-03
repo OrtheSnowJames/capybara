@@ -68,8 +68,10 @@ void handle_packets(std::map<int, Player> *players, int *my_id) {
 
         std::istringstream j(i);
         int id, x, y;
-        j >> id >> x >> y;
+        std::string username;
+        j >> id >> x >> y >> username;
         (*players)[id] = Player(x, y);
+        (*players)[id].username = username;
 
         std::cout << "Inserted player " << id << '\n';
       }
@@ -97,8 +99,10 @@ void handle_packets(std::map<int, Player> *players, int *my_id) {
         int id = std::stoi(msg_split.at(0));
         int x = std::stoi(msg_split.at(1));
         int y = std::stoi(msg_split.at(2));
+        std::string username = msg_split[3];
 
         (*players)[id] = Player(x, y);
+        (*players)[id].username = username;
         std::cout << "added player " << id << "\n";
       }
 
@@ -109,6 +113,10 @@ void handle_packets(std::map<int, Player> *players, int *my_id) {
 
       std::cout << "removed player " << payload << "\n";
       break;
+    case 5: {
+      split(payload, std::string(" "), msg_split);
+      (*players).at(std::stoi(msg_split[0])).username = msg_split[1];
+    } break;
     }
 
     packets.pop_front();
@@ -138,14 +146,13 @@ int main() {
   int server_update_counter = 0;
   bool hasmoved = false;
   bool usernamechosen = false;
-
   std::string usernameprompt;
 
   while (!WindowShouldClose() && running) {
     handle_packets(&players, &my_id);
 
     if (usernamechosen) {
-      server_update_counter++;
+      server_update_counter += 10;
 
       hasmoved = players.at(my_id).move();
 

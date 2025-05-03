@@ -14,8 +14,7 @@
 #include <unistd.h>
 #include <unordered_map>
 #include <utility>
-#include <vector>
-// test
+
 std::mutex players_mutex;
 std::map<int, Player> players;
 
@@ -33,7 +32,7 @@ void handle_client(int client, int id) {
   {
     std::lock_guard<std::mutex> lock(players_mutex);
     for (auto &[k, v] : players)
-      out << ':' << k << ' ' << v.x << ' ' << v.y;
+      out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << v.username;
   } // unlock mutex
   std::string payload = out.str();
 
@@ -113,7 +112,9 @@ void accept_clients(int sock) {
 
     std::ostringstream out;
 
-    out << "3\n" << id << " " << players.at(id).x << " " << players.at(id).y;
+    out << "3\n"
+        << id << " " << players.at(id).x << " " << players.at(id).y << " "
+        << players.at(id).username;
 
     for (auto &pair : clients) {
       if (pair.first != id) {
@@ -228,6 +229,21 @@ int main() {
             }
           }
           break;
+
+        case 5: {
+          std::lock_guard<std::mutex> lock(players_mutex);
+          players[from_id].username = payload;
+          std::lock_guard<std::mutex> lokc(clients_mutex);
+          for (auto &[k, v] : clients) {
+            if (k == from_id)
+              continue;
+            send_message(std::string("5\n")
+                             .append(std::to_string(from_id))
+                             .append(" ")
+                             .append(payload),
+                         v.first);
+          }
+        } break;
         default:
           std::cerr << "INVALID PACKET TYPE: " << packet_type << std::endl;
           break;
