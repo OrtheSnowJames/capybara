@@ -1,0 +1,55 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - prod
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Install build tools and raylib dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y g++ cmake libasound2-dev libgl1-mesa-dev libglu1-mesa-dev libx11-dev libxrandr-dev libxi-dev xorg-dev
+        git clone https://github.com/raysan5/raylib.git
+        cd raylib/src
+        make PLATFORM=PLATFORM_DESKTOP
+        sudo make install
+
+
+    - name: Compile server.cpp
+      run: g++ server.cpp -o server
+
+    - name: Compile client.cpp
+      run: g++ client.cpp -lraylib -o client
+
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: Release ${{ github.sha }}
+        tag_name: release-${{ github.sha }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload server binary
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ./server
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload client binary
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ./client
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
