@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <iostream>
 #include <list>
+#include <map>
 #include <mutex>
 #include <netinet/in.h>
 #include <sstream>
@@ -13,18 +14,19 @@
 #include <unistd.h>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 std::mutex players_mutex;
-std::unordered_map<int, Player> players;
+std::map<int, Player> players;
 
 std::mutex packets_mutex;
 std::list<std::pair<int, std::string>> packets;
 
 std::mutex clients_mutex;
-std::unordered_map<int, std::pair<int, std::thread>> clients;
+std::map<int, std::pair<int, std::thread>> clients;
 
 std::mutex running_mutex;
-std::unordered_map<int, bool> is_running;
+std::map<int, bool> is_running;
 
 void handle_client(int client, int id) {
   std::ostringstream out;
@@ -56,7 +58,6 @@ void handle_client(int client, int id) {
 
     if (received <= 0)
       break;
-
     {
       std::lock_guard<std::mutex> _(running_mutex);
       running = is_running[id];
@@ -67,10 +68,12 @@ void handle_client(int client, int id) {
 
     {
       std::lock_guard<std::mutex> lock(packets_mutex);
-      packets.push_back({
+      packets.push_front({
           id,
           std::string(buffer, received),
       });
+
+      std::cout << "added packet!";
     }
   }
 
@@ -108,16 +111,18 @@ void accept_clients(int sock) {
     std::lock_guard<std::mutex> _(running_mutex);
     is_running[id] = true;
 
-    std::cout << "Added client " << id << " to lists.\n";
+    std::ostringstream out;
 
-    std::ostringstream out("3\n");
+    out << "3\n" << id << " " << players.at(id).x << " " << players.at(id).y;
 
-    out << id << " " << players.at(id).x << " " << players.at(id).y;
-
-    for (auto &[_, v] : clients)
-      send_message(out.str(), v.first);
-
-    std::cout << "Broadcasted client " << id << " joining to all clients.\n";
+    for (auto &pair : clients) {
+      if (pair.first != id) {
+        std::cout << "sent: " << pair.first << std::endl;
+        send_message(out.str(), pair.second.first);
+      } else {
+        std::cout << "skipped: " << pair.first << std::endl;
+      }
+    }
   }
 }
 
@@ -152,7 +157,7 @@ int main() {
   // handle game stuff
   while (1) {
     {
-      std::lock_guard<std::mutex> l(clients_mutex);
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
       std::lock_guard<std::mutex> lo(running_mutex);
 
       std::list<int> to_remove;
@@ -161,7 +166,7 @@ int main() {
           to_remove.push_back(id);
         }
       }
-
+      std::lock_guard<std::mutex> a(clients_mutex);
       for (int i : to_remove) {
         if (clients[i].second.joinable())
           clients[i].second.join();
@@ -169,31 +174,67 @@ int main() {
         shutdown(clients[i].first, SHUT_RDWR);
 
         close(clients[i].first);
-        std::cout << "Erased socket for client " << i << std::endl;
         is_running.erase(i);
-        std::cout << "Erased client " << i << " from running list.\n";
         clients.erase(i);
-        std::cout << "Erased client " << i << " from clients list.\n";
 
-        for (auto &[_, v] : clients)
-          send_message(std::string("4\n" + std::to_string(i)), v.first);
-        std::cout << "Broadcasted removal of client " << i
-                  << " to all clients.\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+        std::string out("4\n" + std::to_string(i));
+        for (auto &pair : clients) {
+          if (pair.first != i) {
+            std::cout << "sent: " << pair.first << std::endl;
+            send_message(out, pair.second.first);
+          } else {
+            std::cout << "skipped: " << pair.first << std::endl;
+          }
+        }
+
+        {
+          std::lock_guard<std::mutex> b(players_mutex);
+          players.erase(i);
+        }
         std::cout << "Removed client " << i << std::endl;
       }
     }
 
-    std::lock_guard<std::mutex> lock(packets_mutex);
+    // ---------------------------------
 
-    while (!packets.empty()) {
-      auto &[from_id, packet] = packets.front();
-      std::cout << "Packet from: " << from_id << std::endl
-                << "Contents: " << packet << std::endl;
+    {
+      std::lock_guard<std::mutex> lock(packets_mutex);
 
-      packets.pop_front();
+      for (auto &[from_id, packet] : packets) {
+        std::cout << "Packet from: " << from_id << std::endl
+                  << "Contents: " << packet << std::endl;
+
+        int packet_type = std::stoi(packet.substr(0, packet.find('\n')));
+        std::string payload = packet.substr(packet.find('\n') + 1);
+
+        switch (packet_type) {
+        case 2: {
+          std::lock_guard<std::mutex> z(players_mutex);
+          std::istringstream j(payload);
+          int x, y;
+          j >> x >> y;
+          if (players.find(from_id) == players.end())
+            break;
+          players.at(from_id).x = x;
+          players.at(from_id).y = y;
+        }
+          for (auto &pair : clients) {
+            if (pair.first != from_id) {
+              std::ostringstream out;
+              out << "2\n" << from_id << " " << payload;
+              send_message(out.str(), pair.second.first);
+            }
+          }
+          break;
+        default:
+          std::cerr << "INVALID PACKET TYPE: " << packet_type << std::endl;
+          break;
+        }
+      }
+      packets.clear();
     }
   }
-
   close(sock);
 }

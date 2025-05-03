@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <iostream>
 #include <list>
+#include <map>
 #include <mutex>
 #include <netinet/in.h>
 #include <sstream>
@@ -13,7 +14,6 @@
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
-#include <unordered_map>
 #include <vector>
 
 int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -46,6 +46,75 @@ void do_recv() {
   }
 }
 
+void handle_packets(std::map<int, Player> *players, int *my_id) {
+  std::lock_guard<std::mutex> lock(packets_mutex);
+  while (!packets.empty()) {
+    std::string packet = packets.front();
+
+    int packet_type = std::stoi(packet.substr(0, packet.find('\n')));
+    std::string payload = packet.substr(packet.find('\n') + 1);
+
+    std::cout << "Pkt type: " << packet_type << std::endl;
+    std::cout << "Payload: " << payload << std::endl;
+    std::istringstream in(payload);
+    std::vector<std::string> msg_split;
+
+    switch (packet_type) {
+    case 0:
+      split(payload, std::string(":"), msg_split);
+      for (std::string i : msg_split) {
+        if (i == std::string(""))
+          continue;
+
+        std::istringstream j(i);
+        int id, x, y;
+        j >> id >> x >> y;
+        (*players)[id] = Player(x, y);
+
+        std::cout << "Inserted player " << id << '\n';
+      }
+
+      break;
+    case 1:
+      in >> *my_id;
+
+      std::cout << "my id: " << *my_id << std::endl;
+      break;
+    case 2: {
+      std::istringstream i(payload);
+      int id, x, y;
+      i >> id >> x >> y;
+
+      if ((*players).find(id) != (*players).end()) {
+        (*players).at(id).x = x;
+        (*players).at(id).y = y;
+      }
+
+    } break;
+    case 3:
+      split(payload, " ", msg_split);
+      {
+        int id = std::stoi(msg_split.at(0));
+        int x = std::stoi(msg_split.at(1));
+        int y = std::stoi(msg_split.at(2));
+
+        (*players)[id] = Player(x, y);
+        std::cout << "added player " << id << "\n";
+      }
+
+      break;
+    case 4:
+      if ((*players).find(std::stoi(payload)) != (*players).end())
+        (*players).erase(std::stoi(payload));
+
+      std::cout << "removed player " << payload << "\n";
+      break;
+    }
+
+    packets.pop_front();
+  }
+}
+
 int main() {
   sockaddr_in sock_addr;
   sock_addr.sin_family = AF_INET;
@@ -60,87 +129,51 @@ int main() {
 
   std::thread recv_thread(do_recv);
 
-  InitWindow(800, 600, "Multipalyer Gmae");
+  InitWindow(800, 600, "Multi Ludens");
 
   SetTargetFPS(60);
 
-  std::unordered_map<int, Player> players;
+  std::map<int, Player> players;
   int my_id;
+  int server_update_counter = 0;
+  bool hasmoved = false;
 
   while (!WindowShouldClose() && running) {
-    std::lock_guard<std::mutex> lock(packets_mutex);
-    while (!packets.empty()) {
-      std::string packet = packets.front();
+    handle_packets(&players, &my_id);
 
-      int packet_type = std::stoi(packet.substr(0, packet.find('\n')));
-      std::string payload = packet.substr(packet.find('\n') + 1);
+    server_update_counter++;
 
-      std::cout << "Pkt type: " << packet_type << std::endl;
-      std::cout << "Payload: " << payload << std::endl;
-      std::istringstream in(payload);
-      std::vector<std::string> msg_split;
+    hasmoved = players.at(my_id).move();
 
-      switch (packet_type) {
-      case 0:
-        split(payload, std::string(":"), msg_split);
-        for (std::string i : msg_split) {
-          if (i == std::string(""))
-            continue;
-
-          std::istringstream j(i);
-          int id, x, y;
-          j >> id >> x >> y;
-
-          players.insert({id, Player(x, y)});
-          std::cout << "Inserted player " << id << '\n';
-        }
-
-        break;
-      case 1:
-        in >> my_id;
-
-        std::cout << "my id: " << my_id << std::endl;
-        break;
-      case 2:
-        break;
-      case 3:
-        split(payload, " ", msg_split);
-        {
-          int id = std::stoi(msg_split.at(0));
-          int x = std::stoi(msg_split.at(1));
-          int y = std::stoi(msg_split.at(2));
-
-          players.insert({id, Player(x, y)});
-        }
-
-        break;
-      case 4:
-        players.erase(std::stoi(payload));
-        break;
-      }
-
-      packets.pop_front();
-    }
-
-    if (IsKeyDown(KEY_W)) {
-      players.at(my_id).y -= 5;
-      std::string msg("1\n");
+    if (server_update_counter >= 10 && hasmoved) {
+      std::string msg("2\n");
       msg.append(std::to_string(players.at(my_id).x));
       msg.append(" ");
       msg.append(std::to_string(players.at(my_id).y));
 
       send_message(msg, sock);
+
+      server_update_counter = 0;
+
+      std::cout << "updated server position\n";
     }
+
+    // ------------------------------------------------------------------------------
+
+    float dt = GetFrameTime();
 
     BeginDrawing();
 
     ClearBackground(WHITE);
+
+    DrawFPS(2, 2);
 
     for (auto &[id, p] : players) {
       Color clr = BLACK;
       if (id == my_id)
         clr = RED;
       DrawRectangle(p.x, p.y, 100, 100, clr);
+      DrawText(std::to_string(id).c_str(), p.x + 50, p.y + 50, 32, GREEN);
     }
 
     EndDrawing();

@@ -2,7 +2,7 @@
 #define UTILS_H
 
 #include <arpa/inet.h>
-#include <iostream>
+#include <cstdio>
 #include <netinet/in.h>
 #include <string>
 #include <sys/socket.h>
@@ -10,10 +10,14 @@
 
 inline void send_message(std::string msg, int sock) {
   const char *msg_str = msg.c_str();
+  if (send(sock, msg_str, msg.size(), 0) < 0) {
+    perror("error sending message");
+  }
+}
 
-  send(sock, msg_str, msg.size(), 0);
-
-  std::cout << "Sent: " << msg << " To: " << sock << std::endl;
+inline void broadcast_message(std::string msg, std::vector<int> socks) {
+  for (int s : socks)
+    send_message(msg, s);
 }
 
 inline void split(std::string str, std::string splitBy,
