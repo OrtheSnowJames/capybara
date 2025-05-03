@@ -2,11 +2,13 @@
 #define PLAYER_H
 
 #include <raylib.h>
+#include <string>
 struct Player {
 public:
   int x = 0;
   int y = 0;
   int speed = 2;
+  std::string username = std::string("unset");
 
   Player(int x, int y) : x(x), y(y) {}
 

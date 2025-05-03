@@ -5,4 +5,4 @@ this is just to keep track of the codes and stuff so i dont reuse anything
 2: movement (on both server and client)
 3: player joined
 4: player left
-5: chat message (TODO)
+5: username

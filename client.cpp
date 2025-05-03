@@ -134,28 +134,33 @@ int main() {
   SetTargetFPS(60);
 
   std::map<int, Player> players;
-  int my_id;
+  int my_id = -1;
   int server_update_counter = 0;
   bool hasmoved = false;
+  bool usernamechosen = false;
+
+  std::string usernameprompt;
 
   while (!WindowShouldClose() && running) {
     handle_packets(&players, &my_id);
 
-    server_update_counter++;
+    if (usernamechosen) {
+      server_update_counter++;
 
-    hasmoved = players.at(my_id).move();
+      hasmoved = players.at(my_id).move();
 
-    if (server_update_counter >= 10 && hasmoved) {
-      std::string msg("2\n");
-      msg.append(std::to_string(players.at(my_id).x));
-      msg.append(" ");
-      msg.append(std::to_string(players.at(my_id).y));
+      if (server_update_counter >= 10 && hasmoved) {
+        std::string msg("2\n");
+        msg.append(std::to_string(players.at(my_id).x));
+        msg.append(" ");
+        msg.append(std::to_string(players.at(my_id).y));
 
-      send_message(msg, sock);
+        send_message(msg, sock);
 
-      server_update_counter = 0;
+        server_update_counter = 0;
 
-      std::cout << "updated server position\n";
+        std::cout << "updated server position\n";
+      }
     }
 
     // ------------------------------------------------------------------------------
@@ -168,12 +173,45 @@ int main() {
 
     DrawFPS(2, 2);
 
-    for (auto &[id, p] : players) {
-      Color clr = BLACK;
-      if (id == my_id)
-        clr = RED;
-      DrawRectangle(p.x, p.y, 100, 100, clr);
-      DrawText(std::to_string(id).c_str(), p.x + 50, p.y + 50, 32, GREEN);
+    if (!usernamechosen) {
+      ClearBackground(BLACK);
+      DrawText("Pick a username", 50, 50, 64, WHITE);
+
+      DrawText(std::to_string(10 - usernameprompt.length())
+                   .append(" characters left.")
+                   .c_str(),
+               50, 290, 32, usernameprompt.length() < 10 ? WHITE : RED);
+      DrawRectangle(50, 200, 500, 75, RED);
+
+      DrawText(usernameprompt.c_str(), 75, 225, 48, BLACK);
+
+      char k = GetCharPressed();
+
+      if (k != 0 && k != '\n' && k != ':' && k != ' ' &&
+          usernameprompt.length() < 10) {
+        usernameprompt.push_back(k);
+      }
+      if (IsKeyPressed(KEY_BACKSPACE) && !usernameprompt.empty())
+        usernameprompt.pop_back();
+      if (IsKeyPressed(KEY_ENTER) && !usernameprompt.empty() && my_id != -1) {
+        players[my_id].username = usernameprompt;
+        usernamechosen = true;
+        send_message(std::string("5\n").append(usernameprompt), sock);
+      }
+
+    } else {
+      for (auto &[id, p] : players) {
+        Color clr = BLACK;
+        if (id == my_id)
+          clr = RED;
+        DrawRectangle(p.x, p.y, 100, 100, clr);
+        DrawRectangle(p.x + 45 - MeasureText(p.username.c_str(), 32) / 2,
+                      p.y - 55, MeasureText(p.username.c_str(), 32) + 10, 42,
+                      BLACK);
+        DrawText(p.username.c_str(),
+                 p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50,
+                 32, GREEN);
+      }
     }
 
     EndDrawing();
