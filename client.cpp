@@ -131,6 +131,7 @@ int main() {
 
   if (connect(sock, (struct sockaddr *)&sock_addr, sizeof(sock_addr)) < 0) {
     perror("Could not connect to server");
+
     close(sock);
     return -1;
   }
@@ -152,11 +153,11 @@ int main() {
     handle_packets(&players, &my_id);
 
     if (usernamechosen) {
-      server_update_counter += 10;
+      server_update_counter++;
 
       hasmoved = players.at(my_id).move();
 
-      if (server_update_counter >= 10 && hasmoved) {
+      if (server_update_counter >= 15 && hasmoved) {
         std::string msg("2\n");
         msg.append(std::to_string(players.at(my_id).x));
         msg.append(" ");
@@ -229,7 +230,6 @@ int main() {
   running = false;
 
   shutdown(sock, SHUT_RDWR);
-
   close(sock);
 
   recv_thread.join();
