@@ -149,6 +149,9 @@ int main() {
   bool usernamechosen = false;
   std::string usernameprompt;
 
+  Image player_current_image = LoadImage("player_current.png");
+  player_current_image.height = 100;
+  player_current_image.width = 100;
   while (!WindowShouldClose() && running) {
     handle_packets(&players, &my_id);
 
@@ -157,7 +160,7 @@ int main() {
 
       hasmoved = players.at(my_id).move();
 
-      if (server_update_counter >= 15 && hasmoved) {
+      if (server_update_counter >= 5 && hasmoved) {
         std::string msg("2\n");
         msg.append(std::to_string(players.at(my_id).x));
         msg.append(" ");
