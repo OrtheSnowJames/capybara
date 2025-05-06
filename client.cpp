@@ -46,6 +46,66 @@ void do_recv() {
   }
 }
 
+void handle_packet(int packet_type, std::string payload,
+                   std::map<int, Player> *players, int *my_id) {
+  std::istringstream in(payload);
+  std::vector<std::string> msg_split;
+
+  switch (packet_type) {
+  case 0:
+    split(payload, std::string(":"), msg_split);
+    for (std::string i : msg_split) {
+      if (i == std::string(""))
+        continue;
+
+      std::istringstream j(i);
+      int id, x, y;
+      std::string username;
+      j >> id >> x >> y >> username;
+      (*players)[id] = Player(x, y);
+      (*players)[id].username = username;
+    }
+
+    break;
+  case 1:
+    in >> *my_id;
+    break;
+  case 2: {
+    std::istringstream i(payload);
+    int id, x, y;
+    i >> id >> x >> y;
+
+    if ((*players).find(id) != (*players).end()) {
+      (*players).at(id).x = x;
+      (*players).at(id).y = y;
+    }
+
+  } break;
+  case 3:
+    split(payload, " ", msg_split);
+    {
+      int id = std::stoi(msg_split.at(0));
+      int x = std::stoi(msg_split.at(1));
+      int y = std::stoi(msg_split.at(2));
+      std::string username = msg_split[3];
+
+      (*players)[id] = Player(x, y);
+      (*players)[id].username = username;
+    }
+
+    break;
+  case 4:
+    if ((*players).find(std::stoi(payload)) != (*players).end())
+      (*players).erase(std::stoi(payload));
+    break;
+
+  case 5: {
+    split(payload, std::string(" "), msg_split);
+    (*players).at(std::stoi(msg_split[0])).username = msg_split[1];
+  } break;
+  }
+}
+
 void handle_packets(std::map<int, Player> *players, int *my_id) {
   std::lock_guard<std::mutex> lock(packets_mutex);
   while (!packets.empty()) {
@@ -54,73 +114,42 @@ void handle_packets(std::map<int, Player> *players, int *my_id) {
     int packet_type = std::stoi(packet.substr(0, packet.find('\n')));
     std::string payload = packet.substr(packet.find('\n') + 1);
 
-    std::cout << "Pkt type: " << packet_type << std::endl;
-    std::cout << "Payload: " << payload << std::endl;
-    std::istringstream in(payload);
-    std::vector<std::string> msg_split;
-
-    switch (packet_type) {
-    case 0:
-      split(payload, std::string(":"), msg_split);
-      for (std::string i : msg_split) {
-        if (i == std::string(""))
-          continue;
-
-        std::istringstream j(i);
-        int id, x, y;
-        std::string username;
-        j >> id >> x >> y >> username;
-        (*players)[id] = Player(x, y);
-        (*players)[id].username = username;
-
-        std::cout << "Inserted player " << id << '\n';
-      }
-
-      break;
-    case 1:
-      in >> *my_id;
-
-      std::cout << "my id: " << *my_id << std::endl;
-      break;
-    case 2: {
-      std::istringstream i(payload);
-      int id, x, y;
-      i >> id >> x >> y;
-
-      if ((*players).find(id) != (*players).end()) {
-        (*players).at(id).x = x;
-        (*players).at(id).y = y;
-      }
-
-    } break;
-    case 3:
-      split(payload, " ", msg_split);
-      {
-        int id = std::stoi(msg_split.at(0));
-        int x = std::stoi(msg_split.at(1));
-        int y = std::stoi(msg_split.at(2));
-        std::string username = msg_split[3];
-
-        (*players)[id] = Player(x, y);
-        (*players)[id].username = username;
-        std::cout << "added player " << id << "\n";
-      }
-
-      break;
-    case 4:
-      if ((*players).find(std::stoi(payload)) != (*players).end())
-        (*players).erase(std::stoi(payload));
-
-      std::cout << "removed player " << payload << "\n";
-      break;
-    case 5: {
-      split(payload, std::string(" "), msg_split);
-      (*players).at(std::stoi(msg_split[0])).username = msg_split[1];
-    } break;
-    }
+    handle_packet(packet_type, payload, players, my_id);
 
     packets.pop_front();
   }
+}
+
+void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
+                        std::map<int, Player> *players, int my_id) {
+  BeginDrawing();
+  ClearBackground(BLACK);
+  DrawText("Pick a username", 50, 50, 64, WHITE);
+
+  DrawText(std::to_string(10 - (*usernameprompt).length())
+               .append(" characters left.")
+               .c_str(),
+           50, 290, 32, (*usernameprompt).length() < 10 ? WHITE : RED);
+  DrawRectangle(50, 200, 500, 75, RED);
+
+  DrawText((*usernameprompt).c_str(), 75, 225, 48, BLACK);
+
+  char k = GetCharPressed();
+
+  if (k != 0 && k != '\n' && k != ':' && k != ' ' &&
+      (*usernameprompt).length() < 10) {
+    (*usernameprompt).push_back(k);
+  }
+  if (IsKeyPressed(KEY_BACKSPACE) && !(*usernameprompt).empty())
+    (*usernameprompt).pop_back();
+
+  if (IsKeyPressed(KEY_ENTER) && !(*usernameprompt).empty() && my_id != -1) {
+    (*players)[my_id].username = *usernameprompt;
+    *usernamechosen = true;
+    send_message(std::string("5\n").append(*usernameprompt), sock);
+  }
+
+  EndDrawing();
 }
 
 int main() {
@@ -149,29 +178,33 @@ int main() {
   bool usernamechosen = false;
   std::string usernameprompt;
 
-  Image player_current_image = LoadImage("player_current.png");
-  player_current_image.height = 100;
-  player_current_image.width = 100;
   while (!WindowShouldClose() && running) {
     handle_packets(&players, &my_id);
 
-    if (usernamechosen) {
-      server_update_counter++;
+    if (my_id == -1) {
+      BeginDrawing();
+      ClearBackground(BLACK);
+      DrawText("waiting for server...", 50, 50, 48, GREEN);
+      EndDrawing();
+      continue;
+    }
 
-      hasmoved = players.at(my_id).move();
+    if (!usernamechosen) {
+      do_username_prompt(&usernameprompt, &usernamechosen, &players, my_id);
+      continue;
+    }
 
-      if (server_update_counter >= 5 && hasmoved) {
-        std::string msg("2\n");
-        msg.append(std::to_string(players.at(my_id).x));
-        msg.append(" ");
-        msg.append(std::to_string(players.at(my_id).y));
+    server_update_counter++;
 
-        send_message(msg, sock);
+    hasmoved = players.at(my_id).move();
 
-        server_update_counter = 0;
+    if (server_update_counter >= 5 && hasmoved) {
+      std::string msg =
+          std::string("2\n" + std::to_string(players.at(my_id).x) + " " +
+                      std::to_string(players.at(my_id).y));
+      send_message(msg, sock);
 
-        std::cout << "updated server position\n";
-      }
+      server_update_counter = 0;
     }
 
     // ------------------------------------------------------------------------------
@@ -184,46 +217,24 @@ int main() {
 
     DrawFPS(2, 2);
 
-    if (!usernamechosen) {
-      ClearBackground(BLACK);
-      DrawText("Pick a username", 50, 50, 64, WHITE);
-
-      DrawText(std::to_string(10 - usernameprompt.length())
-                   .append(" characters left.")
-                   .c_str(),
-               50, 290, 32, usernameprompt.length() < 10 ? WHITE : RED);
-      DrawRectangle(50, 200, 500, 75, RED);
-
-      DrawText(usernameprompt.c_str(), 75, 225, 48, BLACK);
-
-      char k = GetCharPressed();
-
-      if (k != 0 && k != '\n' && k != ':' && k != ' ' &&
-          usernameprompt.length() < 10) {
-        usernameprompt.push_back(k);
-      }
-      if (IsKeyPressed(KEY_BACKSPACE) && !usernameprompt.empty())
-        usernameprompt.pop_back();
-      if (IsKeyPressed(KEY_ENTER) && !usernameprompt.empty() && my_id != -1) {
-        players[my_id].username = usernameprompt;
-        usernamechosen = true;
-        send_message(std::string("5\n").append(usernameprompt), sock);
-      }
-
-    } else {
-      for (auto &[id, p] : players) {
-        Color clr = BLACK;
-        if (id == my_id)
-          clr = RED;
-        DrawRectangle(p.x, p.y, 100, 100, clr);
-        DrawRectangle(p.x + 45 - MeasureText(p.username.c_str(), 32) / 2,
-                      p.y - 55, MeasureText(p.username.c_str(), 32) + 10, 42,
-                      BLACK);
-        DrawText(p.username.c_str(),
-                 p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50,
-                 32, GREEN);
-      }
+    for (auto &[id, p] : players) {
+      if (p.username == "unset")
+        continue;
+      Color clr = BLACK;
+      if (id == my_id)
+        clr = RED;
+      DrawRectangle(p.x, p.y, 100, 100, clr);
+      DrawRectangle(p.x + 45 - MeasureText(p.username.c_str(), 32) / 2,
+                    p.y - 55, MeasureText(p.username.c_str(), 32) + 10, 42,
+                    BLACK);
+      DrawText(p.username.c_str(),
+               p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
+               GREEN);
     }
+
+    DrawRectangle(0, 500, 300, 100, GREEN);
+    DrawRectangle(10, 510, 80, 80, RED);
+    DrawText(players[my_id].username.c_str(), 100, 515, 24, BLACK);
 
     EndDrawing();
   }

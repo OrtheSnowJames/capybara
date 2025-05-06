@@ -40,6 +40,8 @@ void handle_client(int client, int id) {
 
   send_message(msg, client);
 
+  sleep(3);
+
   std::string msg_id = "1\n" + std::to_string(id);
 
   send_message(msg_id, client);
