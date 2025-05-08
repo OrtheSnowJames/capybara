@@ -8,6 +8,7 @@ public:
   int x = 0;
   int y = 0;
   int speed = 2;
+  Color color = BLACK;
   std::string username = std::string("unset");
 
   Player(int x, int y) : x(x), y(y) {}

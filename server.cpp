@@ -7,6 +7,7 @@
 #include <map>
 #include <mutex>
 #include <netinet/in.h>
+#include <raylib.h>
 #include <sstream>
 #include <string>
 #include <sys/socket.h>
@@ -32,7 +33,9 @@ void handle_client(int client, int id) {
   {
     std::lock_guard<std::mutex> lock(players_mutex);
     for (auto &[k, v] : players)
-      out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << v.username;
+      out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << v.username << ' '
+          << (int)v.color.r << ' ' << (int)v.color.g << ' ' << (int)v.color.b
+          << (int)v.color.a;
   } // unlock mutex
   std::string payload = out.str();
 
@@ -73,8 +76,6 @@ void handle_client(int client, int id) {
           id,
           std::string(buffer, received),
       });
-
-      std::cout << "added packet!";
     }
   }
 
@@ -102,7 +103,6 @@ void accept_clients(int sock) {
         break;
     }
 
-    std::cout << "Assigned id " << id << " to new player.\n";
     std::lock_guard<std::mutex> locK(players_mutex);
     players.insert({id, Player(100, 100)});
 
@@ -116,14 +116,14 @@ void accept_clients(int sock) {
 
     out << "3\n"
         << id << " " << players.at(id).x << " " << players.at(id).y << " "
-        << players.at(id).username;
+        << players.at(id).username << " " << (int)players.at(id).color.r << " "
+        << (int)players.at(id).color.g << " " << (int)players.at(id).color.b
+        << " " << (int)players.at(id).color.a;
 
     for (auto &pair : clients) {
       if (pair.first != id) {
-        std::cout << "sent: " << pair.first << std::endl;
         send_message(out.str(), pair.second.first);
       } else {
-        std::cout << "skipped: " << pair.first << std::endl;
       }
     }
   }
@@ -185,10 +185,8 @@ int main() {
         std::string out("4\n" + std::to_string(i));
         for (auto &pair : clients) {
           if (pair.first != i) {
-            std::cout << "sent: " << pair.first << std::endl;
             send_message(out, pair.second.first);
           } else {
-            std::cout << "skipped: " << pair.first << std::endl;
           }
         }
 
@@ -206,8 +204,6 @@ int main() {
       std::lock_guard<std::mutex> lock(packets_mutex);
 
       for (auto &[from_id, packet] : packets) {
-        std::cout << "Packet from: " << from_id << std::endl
-                  << "Contents: " << packet << std::endl;
 
         int packet_type = std::stoi(packet.substr(0, packet.find('\n')));
         std::string payload = packet.substr(packet.find('\n') + 1);
@@ -246,6 +242,25 @@ int main() {
                          v.first);
           }
         } break;
+        case 6: {
+          std::lock_guard<std::mutex> lock(players_mutex);
+          std::istringstream z(payload);
+          int r, g, b, a;
+          z >> r >> g >> b >> a;
+          players[from_id].color = {(unsigned char)r, (unsigned char)g,
+                                    (unsigned char)b, (unsigned char)a};
+          std::lock_guard<std::mutex> lokc(clients_mutex);
+          for (auto &[k, v] : clients) {
+            if (k == from_id)
+              continue;
+            send_message(std::string("6\n")
+                             .append(std::to_string(from_id))
+                             .append(" ")
+                             .append(payload),
+                         v.first);
+          }
+        } break;
+
         default:
           std::cerr << "INVALID PACKET TYPE: " << packet_type << std::endl;
           break;

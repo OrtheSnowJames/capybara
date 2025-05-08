@@ -59,11 +59,13 @@ void handle_packet(int packet_type, std::string payload,
         continue;
 
       std::istringstream j(i);
-      int id, x, y;
+      int id, x, y, r, g, b, a;
       std::string username;
-      j >> id >> x >> y >> username;
+      j >> id >> x >> y >> username >> r >> g >> b >> a;
       (*players)[id] = Player(x, y);
       (*players)[id].username = username;
+      (*players)[id].color = Color{(unsigned char)r, (unsigned char)g,
+                                   (unsigned char)b, (unsigned char)a};
     }
 
     break;
@@ -91,6 +93,12 @@ void handle_packet(int packet_type, std::string payload,
 
       (*players)[id] = Player(x, y);
       (*players)[id].username = username;
+      (*players)[id].color = Color{
+          (unsigned char)std::stoi(std::string(msg_split[4])),
+          (unsigned char)std::stoi(msg_split[5]),
+          (unsigned char)std::stoi(msg_split[6]),
+          (unsigned char)std::stoi(msg_split[7]),
+      };
     }
 
     break;
@@ -98,10 +106,18 @@ void handle_packet(int packet_type, std::string payload,
     if ((*players).find(std::stoi(payload)) != (*players).end())
       (*players).erase(std::stoi(payload));
     break;
-
   case 5: {
     split(payload, std::string(" "), msg_split);
     (*players).at(std::stoi(msg_split[0])).username = msg_split[1];
+  } break;
+  case 6: {
+    split(payload, std::string(" "), msg_split);
+    (*players).at(std::stoi(msg_split[0])).color = Color{
+        (unsigned char)(int)std::stoi(msg_split[1]),
+        (unsigned char)(int)std::stoi(msg_split[2]),
+        (unsigned char)(int)std::stoi(msg_split[3]),
+        (unsigned char)(int)std::stoi(msg_split[4]),
+    };
   } break;
   }
 }
@@ -121,7 +137,8 @@ void handle_packets(std::map<int, Player> *players, int *my_id) {
 }
 
 void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
-                        std::map<int, Player> *players, int my_id) {
+                        std::map<int, Player> *players, int my_id, int *mycolor,
+                        Color options[5]) {
   BeginDrawing();
   ClearBackground(BLACK);
   DrawText("Pick a username", 50, 50, 64, WHITE);
@@ -129,10 +146,10 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
   DrawText(std::to_string(10 - (*usernameprompt).length())
                .append(" characters left.")
                .c_str(),
-           50, 290, 32, (*usernameprompt).length() < 10 ? WHITE : RED);
-  DrawRectangle(50, 200, 500, 75, RED);
+           50, 215, 32, (*usernameprompt).length() < 10 ? WHITE : RED);
+  DrawRectangle(50, 125, 500, 75, BLUE);
 
-  DrawText((*usernameprompt).c_str(), 75, 225, 48, BLACK);
+  DrawText((*usernameprompt).c_str(), 75, 150, 48, BLACK);
 
   char k = GetCharPressed();
 
@@ -147,9 +164,57 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
     (*players)[my_id].username = *usernameprompt;
     *usernamechosen = true;
     send_message(std::string("5\n").append(*usernameprompt), sock);
+    send_message("6\n" + std::to_string(options[*mycolor].r) + ' ' +
+                     std::to_string(options[*mycolor].g) + ' ' +
+                     std::to_string(options[*mycolor].b) + ' ' +
+                     std::to_string(options[*mycolor].a),
+                 sock);
   }
 
+  // Color Pick
+  DrawText("Choose color:", 50, 300, 32, WHITE);
+
+  int x = 50;
+
+  for (int i = 0; i < 6; i++) {
+    Color cc = options[i];
+    if (cc.r == options[*mycolor].r && cc.g == options[*mycolor].g &&
+        cc.b == options[*mycolor].b && cc.a == options[*mycolor].a) {
+      DrawRectangle(x - 10, 340, 70, 70, WHITE);
+    }
+    DrawRectangle(x, 350, 50, 50, cc);
+
+    x += 100;
+  }
+
+  if (IsKeyPressed(KEY_LEFT))
+    (*mycolor)--;
+  if (IsKeyPressed(KEY_RIGHT))
+    (*mycolor)++;
+  if (*mycolor < 0)
+    *mycolor = 4;
+  if (*mycolor > 4)
+    *mycolor = 0;
+
   EndDrawing();
+}
+
+void draw_ui(Color mycolor, std::map<int, Player> players, int my_id) {
+  DrawRectangle(0, 500, 300, 100, DARKBLUE);
+  DrawRectangle(10, 510, 80, 80, mycolor);
+  DrawText(players[my_id].username.c_str(), 100, 515, 24, BLACK);
+}
+
+void draw_players(std::map<int, Player> players) {
+  for (auto &[id, p] : players) {
+    if (p.username == "unset")
+      continue;
+    Color clr = p.color;
+    DrawRectangle(p.x, p.y, 100, 100, clr);
+    DrawText(p.username.c_str(),
+             p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
+             BLACK);
+  }
 }
 
 int main() {
@@ -177,6 +242,9 @@ int main() {
   bool hasmoved = false;
   bool usernamechosen = false;
   std::string usernameprompt;
+  Color mycolor = BLACK;
+  int colorindex = 0;
+  Color options[5] = {RED, GREEN, YELLOW, PURPLE, ORANGE};
 
   while (!WindowShouldClose() && running) {
     handle_packets(&players, &my_id);
@@ -190,8 +258,14 @@ int main() {
     }
 
     if (!usernamechosen) {
-      do_username_prompt(&usernameprompt, &usernamechosen, &players, my_id);
+      do_username_prompt(&usernameprompt, &usernamechosen, &players, my_id,
+                         &colorindex, options);
       continue;
+    }
+
+    if (mycolor.r == 0) {
+      mycolor = options[colorindex];
+      players[my_id].color = mycolor;
     }
 
     server_update_counter++;
@@ -213,28 +287,13 @@ int main() {
 
     BeginDrawing();
 
-    ClearBackground(WHITE);
+    ClearBackground(BLUE);
 
     DrawFPS(2, 2);
 
-    for (auto &[id, p] : players) {
-      if (p.username == "unset")
-        continue;
-      Color clr = BLACK;
-      if (id == my_id)
-        clr = RED;
-      DrawRectangle(p.x, p.y, 100, 100, clr);
-      DrawRectangle(p.x + 45 - MeasureText(p.username.c_str(), 32) / 2,
-                    p.y - 55, MeasureText(p.username.c_str(), 32) + 10, 42,
-                    BLACK);
-      DrawText(p.username.c_str(),
-               p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
-               GREEN);
-    }
+    draw_ui(mycolor, players, my_id);
 
-    DrawRectangle(0, 500, 300, 100, GREEN);
-    DrawRectangle(10, 510, 80, 80, RED);
-    DrawText(players[my_id].username.c_str(), 100, 515, 24, BLACK);
+    draw_players(players);
 
     EndDrawing();
   }
