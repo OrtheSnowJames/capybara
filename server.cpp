@@ -35,7 +35,7 @@ void handle_client(int client, int id) {
     for (auto &[k, v] : players)
       out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << v.username << ' '
           << (int)v.color.r << ' ' << (int)v.color.g << ' ' << (int)v.color.b
-          << (int)v.color.a;
+          << (int)v.color.a << ' ';
   } // unlock mutex
   std::string payload = out.str();
 
@@ -213,11 +213,13 @@ int main() {
           std::lock_guard<std::mutex> z(players_mutex);
           std::istringstream j(payload);
           int x, y;
-          j >> x >> y;
+          float rot;
+          j >> x >> y >> rot;
           if (players.find(from_id) == players.end())
             break;
           players.at(from_id).x = x;
           players.at(from_id).y = y;
+          players.at(from_id).rot = rot;
         }
           for (auto &pair : clients) {
             if (pair.first != from_id) {

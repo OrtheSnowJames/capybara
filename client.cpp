@@ -1,5 +1,7 @@
+#include "math.h"
 #include "player.hpp"
 #include "raylib.h"
+#include "raymath.h"
 #include "utils.hpp"
 #include <arpa/inet.h>
 #include <atomic>
@@ -75,11 +77,13 @@ void handle_packet(int packet_type, std::string payload,
   case 2: {
     std::istringstream i(payload);
     int id, x, y;
-    i >> id >> x >> y;
+    float rot;
+    i >> id >> x >> y >> rot;
 
     if ((*players).find(id) != (*players).end()) {
       (*players).at(id).x = x;
       (*players).at(id).y = y;
+      (*players).at(id).rot = rot;
     }
 
   } break;
@@ -214,7 +218,19 @@ void draw_players(std::map<int, Player> players) {
     DrawText(p.username.c_str(),
              p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
              BLACK);
+
+    DrawRectanglePro({(float)p.x + 50, (float)p.y + 50, 50, 20},
+                     {(float)100, (float)0}, p.rot, BLACK);
   }
+}
+
+bool move_gun(float *rot, int cx, int cy) {
+  Vector2 delta = Vector2Subtract((Vector2){(float)(cx + 50), (float)(cy + 50)},
+                                  GetMousePosition());
+  float angle = atan2f(delta.y, delta.x) * RAD2DEG;
+  *rot = fmod(angle + 360.0f, 360.0f);
+
+  return *rot;
 }
 
 int main() {
@@ -244,9 +260,13 @@ int main() {
   std::string usernameprompt;
   Color mycolor = BLACK;
   int colorindex = 0;
+
   Color options[5] = {RED, GREEN, YELLOW, PURPLE, ORANGE};
 
   while (!WindowShouldClose() && running) {
+    int cx = players[my_id].x;
+    int cy = players[my_id].y;
+
     handle_packets(&players, &my_id);
 
     if (my_id == -1) {
@@ -270,12 +290,14 @@ int main() {
 
     server_update_counter++;
 
-    hasmoved = players.at(my_id).move();
+    hasmoved =
+        players.at(my_id).move() || move_gun(&players[my_id].rot, cx, cy);
 
     if (server_update_counter >= 5 && hasmoved) {
       std::string msg =
           std::string("2\n" + std::to_string(players.at(my_id).x) + " " +
-                      std::to_string(players.at(my_id).y));
+                      std::to_string(players.at(my_id).y) + " " +
+                      std::to_string(players.at(my_id).rot));
       send_message(msg, sock);
 
       server_update_counter = 0;

@@ -10,6 +10,7 @@ public:
   int speed = 2;
   Color color = BLACK;
   std::string username = std::string("unset");
+  float rot = 0;
 
   Player(int x, int y) : x(x), y(y) {}
 
