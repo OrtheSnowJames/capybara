@@ -81,8 +81,8 @@ void handle_packet(int packet_type, std::string payload,
     i >> id >> x >> y >> rot;
 
     if ((*players).find(id) != (*players).end()) {
-      (*players).at(id).x = x;
-      (*players).at(id).y = y;
+      (*players).at(id).nx = x;
+      (*players).at(id).ny = y;
       (*players).at(id).rot = rot;
     }
 
@@ -93,7 +93,7 @@ void handle_packet(int packet_type, std::string payload,
       int id = std::stoi(msg_split.at(0));
       int x = std::stoi(msg_split.at(1));
       int y = std::stoi(msg_split.at(2));
-      std::string username = msg_split[3];
+      std::string username = msg_split.at(3);
 
       (*players)[id] = Player(x, y);
       (*players)[id].username = username;
@@ -132,7 +132,8 @@ void handle_packets(std::map<int, Player> *players, int *my_id) {
     std::string packet = packets.front();
 
     int packet_type = std::stoi(packet.substr(0, packet.find('\n')));
-    std::string payload = packet.substr(packet.find('\n') + 1);
+    std::string payload =
+        packet.substr(packet.find('\n') + 1, packet.find_first_of(';') - 2);
 
     handle_packet(packet_type, payload, players, my_id);
 
@@ -157,7 +158,7 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
 
   char k = GetCharPressed();
 
-  if (k != 0 && k != '\n' && k != ':' && k != ' ' &&
+  if (k != 0 && k != '\n' && k != ':' && k != ' ' && k != ';' &&
       (*usernameprompt).length() < 10) {
     (*usernameprompt).push_back(k);
   }
@@ -228,9 +229,29 @@ bool move_gun(float *rot, int cx, int cy) {
   Vector2 delta = Vector2Subtract((Vector2){(float)(cx + 50), (float)(cy + 50)},
                                   GetMousePosition());
   float angle = atan2f(delta.y, delta.x) * RAD2DEG;
+  float oldrot = *rot;
   *rot = fmod(angle + 360.0f, 360.0f);
 
-  return *rot;
+  return *rot == oldrot;
+}
+
+void move_players(std::map<int, Player> *players, int skip) {
+  for (auto &[k, v] : *players) {
+    if (k == skip)
+      continue;
+    if (v.x != v.nx) {
+      if (v.x < v.nx)
+        v.x += v.speed;
+      if (v.x > v.nx)
+        v.x -= v.speed;
+    }
+    if (v.y != v.ny) {
+      if (v.y < v.ny)
+        v.y += v.speed;
+      if (v.y > v.ny)
+        v.y -= v.speed;
+    }
+  }
 }
 
 int main() {
@@ -290,8 +311,10 @@ int main() {
 
     server_update_counter++;
 
-    hasmoved =
-        players.at(my_id).move() || move_gun(&players[my_id].rot, cx, cy);
+    bool moved = players.at(my_id).move();
+    bool moved_gun = move_gun(&players[my_id].rot, cx, cy);
+
+    hasmoved = moved || moved_gun;
 
     if (server_update_counter >= 5 && hasmoved) {
       std::string msg =
@@ -302,6 +325,8 @@ int main() {
 
       server_update_counter = 0;
     }
+
+    move_players(&players, my_id);
 
     // ------------------------------------------------------------------------------
 

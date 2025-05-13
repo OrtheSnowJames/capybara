@@ -7,14 +7,16 @@ struct Player {
 public:
   int x = 0;
   int y = 0;
+  int nx = 0;
+  int ny = 0;
   int speed = 2;
   Color color = BLACK;
   std::string username = std::string("unset");
   float rot = 0;
 
-  Player(int x, int y) : x(x), y(y) {}
+  Player(int x, int y) : x(x), y(y), nx(x), ny(y) {}
 
-  Player() : x(100), y(100) {};
+  Player() : x(100), y(100), nx(100), ny(100) {};
 
   bool move() {
     bool out = IsKeyDown(KEY_W) || IsKeyDown(KEY_A) || IsKeyDown(KEY_S) ||

@@ -9,6 +9,7 @@
 #include <vector>
 
 inline void send_message(std::string msg, int sock) {
+  msg.push_back(';');
   const char *msg_str = msg.c_str();
   if (send(sock, msg_str, msg.size(), 0) < 0) {
     perror("error sending message");

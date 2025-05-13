@@ -35,7 +35,7 @@ void handle_client(int client, int id) {
     for (auto &[k, v] : players)
       out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << v.username << ' '
           << (int)v.color.r << ' ' << (int)v.color.g << ' ' << (int)v.color.b
-          << (int)v.color.a << ' ';
+          << ' ' << (int)v.color.a << ' ';
   } // unlock mutex
   std::string payload = out.str();
 
