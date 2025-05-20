@@ -6,3 +6,5 @@ this is just to keep track of the codes and stuff so i dont reuse anything
 3: player joined
 4: player left
 5: username
+6: color
+10: bullet

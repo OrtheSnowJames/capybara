@@ -1,3 +1,4 @@
+#include "bullet.hpp"
 #include "math.h"
 #include "player.hpp"
 #include "raylib.h"
@@ -6,6 +7,7 @@
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <list>
 #include <map>
@@ -24,6 +26,23 @@ std::mutex packets_mutex;
 std::list<std::string> packets = {};
 
 std::atomic<bool> running = true;
+
+Color stc(std::string s) {
+  Color output;
+  const char *sc = s.c_str();
+  if (strcmp(sc, "RED") == 0)
+    output = RED;
+  else if (strcmp(sc, "GREEN") == 0)
+    output = GREEN;
+  else if (strcmp(sc, "YELLOW") == 0)
+    output = YELLOW;
+  else if (strcmp(sc, "PURPLE") == 0)
+    output = PURPLE;
+  else if (strcmp(sc, "ORANGE") == 0)
+    output = ORANGE;
+
+  return output;
+}
 
 void do_recv() {
   char buffer[1024];
@@ -61,15 +80,14 @@ void handle_packet(int packet_type, std::string payload,
         continue;
 
       std::istringstream j(i);
-      int id, x, y, r, g, b, a;
-      std::string username;
-      j >> id >> x >> y >> username >> r >> g >> b >> a;
+      int id, x, y;
+      std::string username, clr;
+      j >> id >> x >> y >> username >> clr;
       (*players)[id] = Player(x, y);
       (*players)[id].username = username;
-      (*players)[id].color = Color{(unsigned char)r, (unsigned char)g,
-                                   (unsigned char)b, (unsigned char)a};
+      std::cout << clr;
+      (*players)[id].color = stc(clr);
     }
-
     break;
   case 1:
     in >> *my_id;
@@ -116,12 +134,16 @@ void handle_packet(int packet_type, std::string payload,
   } break;
   case 6: {
     split(payload, std::string(" "), msg_split);
-    (*players).at(std::stoi(msg_split[0])).color = Color{
-        (unsigned char)(int)std::stoi(msg_split[1]),
-        (unsigned char)(int)std::stoi(msg_split[2]),
-        (unsigned char)(int)std::stoi(msg_split[3]),
-        (unsigned char)(int)std::stoi(msg_split[4]),
-    };
+    std::cout << payload << '\n';
+    std::cout << "6\n";
+    if (players->find(std::stoi(msg_split[0])) != players->end()) {
+      (*players).at(std::stoi(msg_split[0])).color = Color{
+          (unsigned char)std::stoi(msg_split[1]),
+          (unsigned char)std::stoi(msg_split[2]),
+          (unsigned char)std::stoi(msg_split[3]),
+          (unsigned char)std::stoi(msg_split[4]),
+      };
+    }
   } break;
   }
 }
@@ -204,18 +226,23 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
   EndDrawing();
 }
 
-void draw_ui(Color mycolor, std::map<int, Player> players, int my_id) {
+void draw_ui(Color mycolor, std::map<int, Player> players, int my_id, int bd) {
   DrawRectangle(0, 500, 300, 100, DARKBLUE);
   DrawRectangle(10, 510, 80, 80, mycolor);
   DrawText(players[my_id].username.c_str(), 100, 515, 24, BLACK);
+  if (bd != 0)
+    DrawRectangle(100, 540, bd * 2, 10, GREEN);
 }
 
-void draw_players(std::map<int, Player> players) {
+void draw_players(std::map<int, Player> players,
+                  std::map<Color, Texture2D, ColorCompare> player_textures) {
   for (auto &[id, p] : players) {
     if (p.username == "unset")
       continue;
     Color clr = p.color;
-    DrawRectangle(p.x, p.y, 100, 100, clr);
+    if (player_textures.find(clr) != player_textures.end())
+      DrawTexture(player_textures[clr], p.x, p.y, WHITE);
+
     DrawText(p.username.c_str(),
              p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
              BLACK);
@@ -226,8 +253,7 @@ void draw_players(std::map<int, Player> players) {
 }
 
 bool move_gun(float *rot, int cx, int cy) {
-  Vector2 delta = Vector2Subtract((Vector2){(float)(cx + 50), (float)(cy + 50)},
-                                  GetMousePosition());
+  Vector2 delta = Vector2Subtract((Vector2){400, 300}, GetMousePosition());
   float angle = atan2f(delta.y, delta.x) * RAD2DEG;
   float oldrot = *rot;
   *rot = fmod(angle + 360.0f, 360.0f);
@@ -273,7 +299,25 @@ int main() {
 
   SetTargetFPS(60);
 
+  Image floorImage = LoadImage("floor_tile.png");
+  ImageResizeNN(&floorImage, 100, 100);
+  Texture2D floorTexture = LoadTextureFromImage(floorImage);
   std::map<int, Player> players;
+  std::vector<Bullet> bullets;
+
+  std::map<Color, Texture2D, ColorCompare> player_textures;
+  player_textures[RED] = LoadTexture("player_red.png");
+  player_textures[GREEN] = LoadTexture("player_green.png");
+  player_textures[YELLOW] = LoadTexture("player_yellow.png");
+  player_textures[PURPLE] = LoadTexture("player_purple.png");
+  player_textures[ORANGE] = LoadTexture("player_orangle.png");
+
+  for (auto &[_, v] : player_textures) {
+    Image a = LoadImageFromTexture(v);
+    ImageResizeNN(&a, 100, 100);
+    v = LoadTextureFromImage(a);
+  }
+
   int my_id = -1;
   int server_update_counter = 0;
   bool hasmoved = false;
@@ -281,12 +325,21 @@ int main() {
   std::string usernameprompt;
   Color mycolor = BLACK;
   int colorindex = 0;
+  int bdelay = 20;
+  int canshoot = false;
 
   Color options[5] = {RED, GREEN, YELLOW, PURPLE, ORANGE};
+
+  Camera2D cam;
+  cam.zoom = 1.0f;
+  cam.rotation = 0.0f;
+  cam.offset = {0.0f, 0.0f};
 
   while (!WindowShouldClose() && running) {
     int cx = players[my_id].x;
     int cy = players[my_id].y;
+
+    cam.target = {(float)cx - 350, (float)cy - 250};
 
     handle_packets(&players, &my_id);
 
@@ -294,6 +347,10 @@ int main() {
       BeginDrawing();
       ClearBackground(BLACK);
       DrawText("waiting for server...", 50, 50, 48, GREEN);
+      if (!players.empty())
+        DrawText("loading...", 50, 100, 32, GREEN);
+      else if (rand() % 2 == 1)
+        DrawText("loading player data...", 50, 100, 32, GREEN);
       EndDrawing();
       continue;
     }
@@ -328,9 +385,38 @@ int main() {
 
     move_players(&players, my_id);
 
+    for (Bullet &b : bullets)
+      b.move();
+
+    if (!canshoot)
+      bdelay--;
+    if (!canshoot && bdelay == 0) {
+      canshoot = true;
+    }
+
+    if (IsMouseButtonDown(0) && canshoot) {
+      canshoot = false;
+      bdelay = 20;
+      float bspeed = 10;
+      float angleRad = (-players[my_id].rot + 5) * DEG2RAD;
+      Vector2 dir = Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -bspeed);
+      Vector2 spawnOffset =
+          Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -120);
+      Vector2 origin = {(float)players[my_id].x + 50,
+                        (float)players[my_id].y + 50};
+      Vector2 spawnPos = Vector2Add(origin, spawnOffset);
+      bullets.push_back(Bullet(spawnPos.x, spawnPos.y, dir));
+
+      send_message(
+          std::string("10\n ").append(std::to_string(players[my_id].rot)),
+          sock);
+    }
+
     // ------------------------------------------------------------------------------
 
     float dt = GetFrameTime();
+
+    cam.target = {(float)players[my_id].x - 350, (float)players[my_id].y - 250};
 
     BeginDrawing();
 
@@ -338,9 +424,22 @@ int main() {
 
     DrawFPS(2, 2);
 
-    draw_ui(mycolor, players, my_id);
+    BeginMode2D(cam);
 
-    draw_players(players);
+    for (int i = 0; i < 200; i++) {
+      for (int j = 0; j < 200; j++) {
+        DrawTexture(floorTexture, i * 100, j * 100, WHITE);
+      }
+    }
+
+    draw_players(players, player_textures);
+
+    for (Bullet &b : bullets)
+      b.show();
+
+    EndMode2D();
+
+    draw_ui(mycolor, players, my_id, bdelay);
 
     EndDrawing();
   }

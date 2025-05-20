@@ -28,21 +28,40 @@ std::map<int, std::pair<int, std::thread>> clients;
 std::mutex running_mutex;
 std::map<int, bool> is_running;
 
+std::string cts(Color c) {
+  const char *s = "IDK";
+  ColorCompare comp;
+  if (comp(c, RED))
+    s = "RED";
+  else if (comp(c, GREEN))
+    s = "GREEN";
+  else if (comp(c, YELLOW))
+    s = "YELLOW";
+  else if (comp(c, PURPLE))
+    s = "PURPLE";
+  else if (comp(c, ORANGE))
+    s = "ORANGE";
+
+  std::cout << s << std::endl;
+
+  return std::string(s);
+}
+
 void handle_client(int client, int id) {
-  std::ostringstream out;
   {
-    std::lock_guard<std::mutex> lock(players_mutex);
-    for (auto &[k, v] : players)
-      out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << v.username << ' '
-          << (int)v.color.r << ' ' << (int)v.color.g << ' ' << (int)v.color.b
-          << ' ' << (int)v.color.a << ' ';
-  } // unlock mutex
-  std::string payload = out.str();
+    std::ostringstream out;
+    {
+      std::lock_guard<std::mutex> lock(players_mutex);
+      for (auto &[k, v] : players)
+        out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << v.username << ' '
+            << cts(v.color);
+    } // unlock mutex
+    std::string payload = out.str();
 
-  std::string msg = "0\n" + payload;
+    std::string msg = "0\n" + payload;
 
-  send_message(msg, client);
-
+    send_message(msg, client);
+  }
   sleep(3);
 
   std::string msg_id = "1\n" + std::to_string(id);

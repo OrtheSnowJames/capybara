@@ -10,7 +10,7 @@ public:
   int nx = 0;
   int ny = 0;
   int speed = 2;
-  Color color = BLACK;
+  Color color = RED;
   std::string username = std::string("unset");
   float rot = 0;
 

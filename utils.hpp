@@ -1,12 +1,19 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include "raylib.h"
 #include <arpa/inet.h>
 #include <cstdio>
 #include <netinet/in.h>
 #include <string>
 #include <sys/socket.h>
 #include <vector>
+
+struct ColorCompare {
+  bool operator()(const Color &a, const Color &b) const {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+  }
+};
 
 inline void send_message(std::string msg, int sock) {
   msg.push_back(';');
