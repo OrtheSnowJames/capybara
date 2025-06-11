@@ -28,25 +28,6 @@ std::map<int, std::pair<int, std::thread>> clients;
 std::mutex running_mutex;
 std::map<int, bool> is_running;
 
-std::string cts(Color c) {
-  const char *s = "IDK";
-  ColorCompare comp;
-  if (comp(c, RED))
-    s = "RED";
-  else if (comp(c, GREEN))
-    s = "GREEN";
-  else if (comp(c, YELLOW))
-    s = "YELLOW";
-  else if (comp(c, PURPLE))
-    s = "PURPLE";
-  else if (comp(c, ORANGE))
-    s = "ORANGE";
-
-  std::cout << s << std::endl;
-
-  return std::string(s);
-}
-
 void handle_client(int client, int id) {
   {
     std::ostringstream out;
@@ -54,7 +35,8 @@ void handle_client(int client, int id) {
       std::lock_guard<std::mutex> lock(players_mutex);
       for (auto &[k, v] : players)
         out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << v.username << ' '
-            << cts(v.color);
+            << color_to_uint(v.color);
+      std::cout << out.str() << std::endl;
     } // unlock mutex
     std::string payload = out.str();
 
@@ -67,6 +49,22 @@ void handle_client(int client, int id) {
   std::string msg_id = "1\n" + std::to_string(id);
 
   send_message(msg_id, client);
+  {
+    std::lock_guard<std::mutex> locK(players_mutex);
+    players.insert({id, Player(100, 100)});
+  }
+
+  std::ostringstream out;
+
+  out << "3\n"
+      << id << " " << players.at(id).x << " " << players.at(id).y << " "
+      << players.at(id).username << " " << color_to_uint(players.at(id).color);
+
+  for (auto &pair : clients) {
+    if (pair.first != id) {
+      send_message(out.str(), pair.second.first);
+    }
+  }
 
   bool running;
   {
@@ -122,29 +120,11 @@ void accept_clients(int sock) {
         break;
     }
 
-    std::lock_guard<std::mutex> locK(players_mutex);
-    players.insert({id, Player(100, 100)});
-
     std::lock_guard<std::mutex> lock(clients_mutex);
     clients[id] = {client, std::thread(handle_client, client, id)};
 
     std::lock_guard<std::mutex> _(running_mutex);
     is_running[id] = true;
-
-    std::ostringstream out;
-
-    out << "3\n"
-        << id << " " << players.at(id).x << " " << players.at(id).y << " "
-        << players.at(id).username << " " << (int)players.at(id).color.r << " "
-        << (int)players.at(id).color.g << " " << (int)players.at(id).color.b
-        << " " << (int)players.at(id).color.a;
-
-    for (auto &pair : clients) {
-      if (pair.first != id) {
-        send_message(out.str(), pair.second.first);
-      } else {
-      }
-    }
   }
 }
 
@@ -264,12 +244,14 @@ int main() {
           }
         } break;
         case 6: {
+          // THIS PART IS GOOD
           std::lock_guard<std::mutex> lock(players_mutex);
-          std::istringstream z(payload);
-          int r, g, b, a;
-          z >> r >> g >> b >> a;
-          players[from_id].color = {(unsigned char)r, (unsigned char)g,
-                                    (unsigned char)b, (unsigned char)a};
+          unsigned int x = (unsigned int)std::stoi(payload);
+          std::cout << "Received code 6, setting player color to " << x
+                    << std::endl;
+          players[from_id].color = uint_to_color(x);
+          std::cout << "Color is now " << color_to_uint(players[from_id].color)
+                    << std::endl;
           std::lock_guard<std::mutex> lokc(clients_mutex);
           for (auto &[k, v] : clients) {
             if (k == from_id)

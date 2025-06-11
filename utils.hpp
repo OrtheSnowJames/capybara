@@ -9,9 +9,50 @@
 #include <sys/socket.h>
 #include <vector>
 
+inline bool color_equal(Color a, Color b) {
+  return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+}
+
+inline Color uint_to_color(unsigned int i) {
+  switch (i) {
+  case 0:
+    return RED;
+  case 1:
+    return GREEN;
+  case 2:
+    return YELLOW;
+  case 3:
+    return PURPLE;
+  case 4:
+    return ORANGE;
+  }
+  return BLACK;
+}
+
+inline unsigned int color_to_uint(Color c) {
+  if (color_equal(c, RED))
+    return 0;
+  else if (color_equal(c, GREEN))
+    return 1;
+  else if (color_equal(c, YELLOW))
+    return 2;
+  else if (color_equal(c, PURPLE))
+    return 3;
+  else if (color_equal(c, ORANGE))
+    return 4;
+  return 5;
+}
+
 struct ColorCompare {
   bool operator()(const Color &a, const Color &b) const {
-    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+    // Proper less-than comparison for map ordering
+    if (a.r != b.r)
+      return a.r < b.r;
+    if (a.g != b.g)
+      return a.g < b.g;
+    if (a.b != b.b)
+      return a.b < b.b;
+    return a.a < b.a;
   }
 };
 

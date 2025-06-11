@@ -7,7 +7,6 @@
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdio>
-#include <cstring>
 #include <iostream>
 #include <list>
 #include <map>
@@ -26,23 +25,6 @@ std::mutex packets_mutex;
 std::list<std::string> packets = {};
 
 std::atomic<bool> running = true;
-
-Color stc(std::string s) {
-  Color output;
-  const char *sc = s.c_str();
-  if (strcmp(sc, "RED") == 0)
-    output = RED;
-  else if (strcmp(sc, "GREEN") == 0)
-    output = GREEN;
-  else if (strcmp(sc, "YELLOW") == 0)
-    output = YELLOW;
-  else if (strcmp(sc, "PURPLE") == 0)
-    output = PURPLE;
-  else if (strcmp(sc, "ORANGE") == 0)
-    output = ORANGE;
-
-  return output;
-}
 
 void do_recv() {
   char buffer[1024];
@@ -79,16 +61,38 @@ void handle_packet(int packet_type, std::string payload,
       if (i == std::string(""))
         continue;
 
-      std::istringstream j(i);
-      int id, x, y;
-      std::string username, clr;
-      j >> id >> x >> y >> username >> clr;
-      (*players)[id] = Player(x, y);
-      (*players)[id].username = username;
-      std::cout << clr;
-      (*players)[id].color = stc(clr);
+      // Split each player entry by spaces
+      std::vector<std::string> player_parts;
+      split(i, std::string(" "), player_parts);
+
+      if (player_parts.size() < 5) {
+        std::cerr << "Invalid player data: " << i << std::endl;
+        continue;
+      }
+
+      try {
+        int id = std::stoi(player_parts[0]);
+        int x = std::stoi(player_parts[1]);
+        int y = std::stoi(player_parts[2]);
+        std::string username = player_parts[3];
+
+        // The color should be the last element
+        unsigned int color_code =
+            (unsigned int)std::stoi(player_parts[player_parts.size() - 1]);
+
+        (*players)[id] = Player(x, y);
+        (*players)[id].username = username;
+        (*players)[id].color = uint_to_color(color_code);
+
+        std::cout << "Player " << id << " color code: " << color_code
+                  << std::endl;
+      } catch (const std::exception &e) {
+        std::cerr << "Error parsing player data: " << i << " - " << e.what()
+                  << std::endl;
+      }
     }
     break;
+
   case 1:
     in >> *my_id;
     break;
@@ -115,12 +119,7 @@ void handle_packet(int packet_type, std::string payload,
 
       (*players)[id] = Player(x, y);
       (*players)[id].username = username;
-      (*players)[id].color = Color{
-          (unsigned char)std::stoi(std::string(msg_split[4])),
-          (unsigned char)std::stoi(msg_split[5]),
-          (unsigned char)std::stoi(msg_split[6]),
-          (unsigned char)std::stoi(msg_split[7]),
-      };
+      (*players)[id].color = uint_to_color(std::stoi(msg_split.at(4)));
     }
 
     break;
@@ -134,15 +133,9 @@ void handle_packet(int packet_type, std::string payload,
   } break;
   case 6: {
     split(payload, std::string(" "), msg_split);
-    std::cout << payload << '\n';
-    std::cout << "6\n";
     if (players->find(std::stoi(msg_split[0])) != players->end()) {
-      (*players).at(std::stoi(msg_split[0])).color = Color{
-          (unsigned char)std::stoi(msg_split[1]),
-          (unsigned char)std::stoi(msg_split[2]),
-          (unsigned char)std::stoi(msg_split[3]),
-          (unsigned char)std::stoi(msg_split[4]),
-      };
+      (*players).at(std::stoi(msg_split[0])).color =
+          uint_to_color(std::stoi(msg_split[1]));
     }
   } break;
   }
@@ -191,10 +184,8 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
     (*players)[my_id].username = *usernameprompt;
     *usernamechosen = true;
     send_message(std::string("5\n").append(*usernameprompt), sock);
-    send_message("6\n" + std::to_string(options[*mycolor].r) + ' ' +
-                     std::to_string(options[*mycolor].g) + ' ' +
-                     std::to_string(options[*mycolor].b) + ' ' +
-                     std::to_string(options[*mycolor].a),
+    sleep(2);
+    send_message("6\n" + std::to_string(color_to_uint(options[*mycolor])),
                  sock);
   }
 
@@ -203,10 +194,9 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
 
   int x = 50;
 
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < 5; i++) {
     Color cc = options[i];
-    if (cc.r == options[*mycolor].r && cc.g == options[*mycolor].g &&
-        cc.b == options[*mycolor].b && cc.a == options[*mycolor].a) {
+    if (color_equal(cc, options[*mycolor])) {
       DrawRectangle(x - 10, 340, 70, 70, WHITE);
     }
     DrawRectangle(x, 350, 50, 50, cc);
@@ -347,10 +337,7 @@ int main() {
       BeginDrawing();
       ClearBackground(BLACK);
       DrawText("waiting for server...", 50, 50, 48, GREEN);
-      if (!players.empty())
-        DrawText("loading...", 50, 100, 32, GREEN);
-      else if (rand() % 2 == 1)
-        DrawText("loading player data...", 50, 100, 32, GREEN);
+      DrawText("loading...", 50, 100, 32, GREEN);
       EndDrawing();
       continue;
     }
@@ -361,7 +348,8 @@ int main() {
       continue;
     }
 
-    if (mycolor.r == 0) {
+    if (mycolor.r == 0 && mycolor.g == 0 && mycolor.b == 0) {
+      std::cout << colorindex << std::endl;
       mycolor = options[colorindex];
       players[my_id].color = mycolor;
     }
