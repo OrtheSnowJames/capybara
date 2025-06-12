@@ -54,8 +54,16 @@ void handle_packet(int packet_type, std::string payload,
   std::istringstream in(payload);
   std::vector<std::string> msg_split;
 
+  if (packet_type != 2) {
+    std::cout << payload << std::endl;
+  }
+
   switch (packet_type) {
   case 0:
+    // Remove trailing semicolon if present
+    if (!payload.empty() && payload.back() == ';') {
+      payload.pop_back();
+    }
     split(payload, std::string(":"), msg_split);
     for (std::string i : msg_split) {
       if (i == std::string(""))
@@ -74,8 +82,12 @@ void handle_packet(int packet_type, std::string payload,
         int id = std::stoi(player_parts[0]);
         int x = std::stoi(player_parts[1]);
         int y = std::stoi(player_parts[2]);
-        std::string username = player_parts[3];
-
+        // Join all fields between index 3 and last-1 as the username
+        std::string username;
+        for (size_t j = 3; j + 1 < player_parts.size(); ++j) {
+          if (!username.empty()) username += " ";
+          username += player_parts[j];
+        }
         // The color should be the last element
         unsigned int color_code =
             (unsigned int)std::stoi(player_parts[player_parts.size() - 1]);
