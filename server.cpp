@@ -30,14 +30,36 @@ std::map<int, bool> is_running;
 
 void handle_client(int client, int id) {
   {
+    // default values...
+    {
+      std::lock_guard<std::mutex> lock(players_mutex);
+      Player p(100, 100);
+      p.username = "unset";
+      p.color = RED;
+      players.insert({id, p});
+    }
+    
     std::ostringstream out;
     {
       std::lock_guard<std::mutex> lock(players_mutex);
-      for (auto &[k, v] : players)
-        out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << v.username << ' '
-            << color_to_uint(v.color);
+
+      for (auto &[k, v] : players) {
+        // sanitize 
+        std::string safe_username = v.username;
+        if (safe_username.empty()) safe_username = "unset";
+        // remove bad characters
+        for (char &c : safe_username) {
+          if (c == ';' || c == ':' || c == ' ') c = '_';
+        }
+        // sanitize color
+        uint col = color_to_uint(v.color);
+        if (col > 4) col = 1;
+        out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << safe_username << ' ' << col;
+      }
       std::cout << out.str() << std::endl;
-    } // unlock mutex
+    }
+    
+    // unlock mutex
     std::string payload = out.str();
 
     std::string msg = "0\n" + payload;
@@ -49,10 +71,6 @@ void handle_client(int client, int id) {
   std::string msg_id = "1\n" + std::to_string(id);
 
   send_message(msg_id, client);
-  {
-    std::lock_guard<std::mutex> locK(players_mutex);
-    players.insert({id, Player(100, 100)});
-  }
 
   std::ostringstream out;
 
