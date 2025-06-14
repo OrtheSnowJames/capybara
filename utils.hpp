@@ -1,13 +1,17 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include "player.hpp"
 #include "raylib.h"
 #include <arpa/inet.h>
 #include <cstdio>
+#include <map>
 #include <netinet/in.h>
 #include <string>
 #include <sys/socket.h>
 #include <vector>
+
+typedef std::map<int, Player> playermap;
 
 inline bool color_equal(Color a, Color b) {
   return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
@@ -102,4 +106,5 @@ inline void split(std::string str, std::string splitBy,
         frag.substr(splitAt + splitLen, frag.size() - (splitAt + splitLen)));
   }
 }
+
 #endif

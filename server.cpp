@@ -1,3 +1,4 @@
+#include "game.hpp"
 #include "player.hpp"
 #include "utils.hpp"
 #include <arpa/inet.h>
@@ -16,14 +17,18 @@
 #include <unordered_map>
 #include <utility>
 
-std::mutex players_mutex;
-std::map<int, Player> players;
+std::mutex game_mutex;
+Game game;
+
+typedef std::list<std::pair<int, std::string>> packetlist;
 
 std::mutex packets_mutex;
-std::list<std::pair<int, std::string>> packets;
+packetlist packets;
+
+typedef std::pair<int, std::thread> client;
 
 std::mutex clients_mutex;
-std::map<int, std::pair<int, std::thread>> clients;
+std::map<int, client> clients;
 
 std::mutex running_mutex;
 std::map<int, bool> is_running;
@@ -32,33 +37,37 @@ void handle_client(int client, int id) {
   {
     // default values...
     {
-      std::lock_guard<std::mutex> lock(players_mutex);
+      std::lock_guard<std::mutex> lock(game_mutex);
       Player p(100, 100);
       p.username = "unset";
       p.color = RED;
-      players.insert({id, p});
+      game.players.insert({id, p});
     }
-    
+
     std::ostringstream out;
     {
-      std::lock_guard<std::mutex> lock(players_mutex);
+      std::lock_guard<std::mutex> lock(game_mutex);
 
-      for (auto &[k, v] : players) {
-        // sanitize 
+      for (auto &[k, v] : game.players) {
+        // sanitize
         std::string safe_username = v.username;
-        if (safe_username.empty()) safe_username = "unset";
+        if (safe_username.empty())
+          safe_username = "unset";
         // remove bad characters
         for (char &c : safe_username) {
-          if (c == ';' || c == ':' || c == ' ') c = '_';
+          if (c == ';' || c == ':' || c == ' ')
+            c = '_';
         }
         // sanitize color
         uint col = color_to_uint(v.color);
-        if (col > 4) col = 1;
-        out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << safe_username << ' ' << col;
+        if (col > 4)
+          col = 1;
+        out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << safe_username
+            << ' ' << col;
       }
       std::cout << out.str() << std::endl;
     }
-    
+
     // unlock mutex
     std::string payload = out.str();
 
@@ -75,8 +84,9 @@ void handle_client(int client, int id) {
   std::ostringstream out;
 
   out << "3\n"
-      << id << " " << players.at(id).x << " " << players.at(id).y << " "
-      << players.at(id).username << " " << color_to_uint(players.at(id).color);
+      << id << " " << game.players.at(id).x << " " << game.players.at(id).y
+      << " " << game.players.at(id).username << " "
+      << color_to_uint(game.players.at(id).color);
 
   for (auto &pair : clients) {
     if (pair.first != id) {
@@ -117,8 +127,8 @@ void handle_client(int client, int id) {
   {
     std::lock_guard<std::mutex> _(running_mutex);
     is_running[id] = false;
-    std::lock_guard<std::mutex> _lock(players_mutex);
-    players.erase(id);
+    std::lock_guard<std::mutex> _lock(game_mutex);
+    game.players.erase(id);
   }
 
   std::cout << "Client " << id << " disconnected.\n";
@@ -130,7 +140,7 @@ void accept_clients(int sock) {
     int id = 0;
     while (1) {
       int id_init = id;
-      for (auto &[k, v] : players)
+      for (auto &[k, v] : game.players)
         if (id == k)
           id++;
 
@@ -208,8 +218,8 @@ int main() {
         }
 
         {
-          std::lock_guard<std::mutex> b(players_mutex);
-          players.erase(i);
+          std::lock_guard<std::mutex> b(game_mutex);
+          game.players.erase(i);
         }
         std::cout << "Removed client " << i << std::endl;
       }
@@ -227,16 +237,16 @@ int main() {
 
         switch (packet_type) {
         case 2: {
-          std::lock_guard<std::mutex> z(players_mutex);
+          std::lock_guard<std::mutex> z(game_mutex);
           std::istringstream j(payload);
           int x, y;
           float rot;
           j >> x >> y >> rot;
-          if (players.find(from_id) == players.end())
+          if (game.players.find(from_id) == game.players.end())
             break;
-          players.at(from_id).x = x;
-          players.at(from_id).y = y;
-          players.at(from_id).rot = rot;
+          game.players.at(from_id).x = x;
+          game.players.at(from_id).y = y;
+          game.players.at(from_id).rot = rot;
         }
           for (auto &pair : clients) {
             if (pair.first != from_id) {
@@ -248,8 +258,8 @@ int main() {
           break;
 
         case 5: {
-          std::lock_guard<std::mutex> lock(players_mutex);
-          players[from_id].username = payload;
+          std::lock_guard<std::mutex> lock(game_mutex);
+          game.players[from_id].username = payload;
           std::lock_guard<std::mutex> lokc(clients_mutex);
           for (auto &[k, v] : clients) {
             if (k == from_id)
@@ -263,13 +273,13 @@ int main() {
         } break;
         case 6: {
           // THIS PART IS GOOD
-          std::lock_guard<std::mutex> lock(players_mutex);
+          std::lock_guard<std::mutex> lock(game_mutex);
           unsigned int x = (unsigned int)std::stoi(payload);
           std::cout << "Received code 6, setting player color to " << x
                     << std::endl;
-          players[from_id].color = uint_to_color(x);
-          std::cout << "Color is now " << color_to_uint(players[from_id].color)
-                    << std::endl;
+          game.players[from_id].color = uint_to_color(x);
+          std::cout << "Color is now "
+                    << color_to_uint(game.players[from_id].color) << std::endl;
           std::lock_guard<std::mutex> lokc(clients_mutex);
           for (auto &[k, v] : clients) {
             if (k == from_id)

@@ -1,4 +1,5 @@
 #include "bullet.hpp"
+#include "game.hpp"
 #include "math.h"
 #include "player.hpp"
 #include "raylib.h"
@@ -49,8 +50,8 @@ void do_recv() {
   }
 }
 
-void handle_packet(int packet_type, std::string payload,
-                   std::map<int, Player> *players, int *my_id) {
+void handle_packet(int packet_type, std::string payload, Game *game,
+                   int *my_id) {
   std::istringstream in(payload);
   std::vector<std::string> msg_split;
 
@@ -85,16 +86,17 @@ void handle_packet(int packet_type, std::string payload,
         // join all fields between index 3 and last-1 as the username
         std::string username;
         for (size_t j = 3; j + 1 < player_parts.size(); ++j) {
-          if (!username.empty()) username += " ";
+          if (!username.empty())
+            username += " ";
           username += player_parts[j];
         }
         // the color should be the last element
         unsigned int color_code =
             (unsigned int)std::stoi(player_parts[player_parts.size() - 1]);
 
-        (*players)[id] = Player(x, y);
-        (*players)[id].username = username;
-        (*players)[id].color = uint_to_color(color_code);
+        (*game).players[id] = Player(x, y);
+        (*game).players[id].username = username;
+        (*game).players[id].color = uint_to_color(color_code);
 
         std::cout << "Player " << id << " color code: " << color_code
                   << std::endl;
@@ -114,10 +116,10 @@ void handle_packet(int packet_type, std::string payload,
     float rot;
     i >> id >> x >> y >> rot;
 
-    if ((*players).find(id) != (*players).end()) {
-      (*players).at(id).nx = x;
-      (*players).at(id).ny = y;
-      (*players).at(id).rot = rot;
+    if ((*game).players.find(id) != (*game).players.end()) {
+      (*game).players.at(id).nx = x;
+      (*game).players.at(id).ny = y;
+      (*game).players.at(id).rot = rot;
     }
 
   } break;
@@ -129,31 +131,32 @@ void handle_packet(int packet_type, std::string payload,
       int y = std::stoi(msg_split.at(2));
       std::string username = msg_split.at(3);
 
-      (*players)[id] = Player(x, y);
-      (*players)[id].username = username;
-      (*players)[id].color = uint_to_color(std::stoi(msg_split.at(4)));
+      (*game).players[id] = Player(x, y);
+      (*game).players[id].username = username;
+      (*game).players[id].color = uint_to_color(std::stoi(msg_split.at(4)));
     }
 
     break;
   case 4:
-    if ((*players).find(std::stoi(payload)) != (*players).end())
-      (*players).erase(std::stoi(payload));
+    if ((*game).players.find(std::stoi(payload)) != (*game).players.end())
+      (*game).players.erase(std::stoi(payload));
     break;
   case 5: {
     split(payload, std::string(" "), msg_split);
-    (*players).at(std::stoi(msg_split[0])).username = msg_split[1];
+    (*game).players.at(std::stoi(msg_split[0])).username = msg_split[1];
   } break;
   case 6: {
     split(payload, std::string(" "), msg_split);
-    if (players->find(std::stoi(msg_split[0])) != players->end()) {
-      (*players).at(std::stoi(msg_split[0])).color =
+    if ((*game).players.find(std::stoi(msg_split[0])) !=
+        (*game).players.end()) {
+      (*game).players.at(std::stoi(msg_split[0])).color =
           uint_to_color(std::stoi(msg_split[1]));
     }
   } break;
   }
 }
 
-void handle_packets(std::map<int, Player> *players, int *my_id) {
+void handle_packets(Game *game, int *my_id) {
   std::lock_guard<std::mutex> lock(packets_mutex);
   while (!packets.empty()) {
     std::string packet = packets.front();
@@ -162,14 +165,14 @@ void handle_packets(std::map<int, Player> *players, int *my_id) {
     std::string payload =
         packet.substr(packet.find('\n') + 1, packet.find_first_of(';') - 2);
 
-    handle_packet(packet_type, payload, players, my_id);
+    handle_packet(packet_type, payload, game, my_id);
 
     packets.pop_front();
   }
 }
 
 void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
-                        std::map<int, Player> *players, int my_id, int *mycolor,
+                        playermap *players, int my_id, int *mycolor,
                         Color options[5]) {
   BeginDrawing();
   ClearBackground(BLACK);
@@ -228,7 +231,7 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
   EndDrawing();
 }
 
-void draw_ui(Color mycolor, std::map<int, Player> players, int my_id, int bd) {
+void draw_ui(Color mycolor, playermap players, int my_id, int bd) {
   DrawRectangle(0, 500, 300, 100, DARKBLUE);
   DrawRectangle(10, 510, 80, 80, mycolor);
   DrawText(players[my_id].username.c_str(), 100, 515, 24, BLACK);
@@ -236,7 +239,7 @@ void draw_ui(Color mycolor, std::map<int, Player> players, int my_id, int bd) {
     DrawRectangle(100, 540, bd * 2, 10, GREEN);
 }
 
-void draw_players(std::map<int, Player> players,
+void draw_players(playermap players,
                   std::map<Color, Texture2D, ColorCompare> player_textures) {
   for (auto &[id, p] : players) {
     if (p.username == "unset")
@@ -263,7 +266,7 @@ bool move_gun(float *rot, int cx, int cy) {
   return *rot == oldrot;
 }
 
-void move_players(std::map<int, Player> *players, int skip) {
+void move_players(playermap *players, int skip) {
   for (auto &[k, v] : *players) {
     if (k == skip)
       continue;
@@ -304,7 +307,7 @@ int main() {
   Image floorImage = LoadImage("floor_tile.png");
   ImageResizeNN(&floorImage, 100, 100);
   Texture2D floorTexture = LoadTextureFromImage(floorImage);
-  std::map<int, Player> players;
+  Game game;
   std::vector<Bullet> bullets;
 
   std::map<Color, Texture2D, ColorCompare> player_textures;
@@ -338,12 +341,12 @@ int main() {
   cam.offset = {0.0f, 0.0f};
 
   while (!WindowShouldClose() && running) {
-    int cx = players[my_id].x;
-    int cy = players[my_id].y;
+    int cx = game.players[my_id].x;
+    int cy = game.players[my_id].y;
 
     cam.target = {(float)cx - 350, (float)cy - 250};
 
-    handle_packets(&players, &my_id);
+    handle_packets(&game, &my_id);
 
     if (my_id == -1) {
       BeginDrawing();
@@ -355,7 +358,7 @@ int main() {
     }
 
     if (!usernamechosen) {
-      do_username_prompt(&usernameprompt, &usernamechosen, &players, my_id,
+      do_username_prompt(&usernameprompt, &usernamechosen, &game.players, my_id,
                          &colorindex, options);
       continue;
     }
@@ -363,27 +366,27 @@ int main() {
     if (mycolor.r == 0 && mycolor.g == 0 && mycolor.b == 0) {
       std::cout << colorindex << std::endl;
       mycolor = options[colorindex];
-      players[my_id].color = mycolor;
+      game.players[my_id].color = mycolor;
     }
 
     server_update_counter++;
 
-    bool moved = players.at(my_id).move();
-    bool moved_gun = move_gun(&players[my_id].rot, cx, cy);
+    bool moved = game.players.at(my_id).move();
+    bool moved_gun = move_gun(&game.players[my_id].rot, cx, cy);
 
     hasmoved = moved || moved_gun;
 
     if (server_update_counter >= 5 && hasmoved) {
       std::string msg =
-          std::string("2\n" + std::to_string(players.at(my_id).x) + " " +
-                      std::to_string(players.at(my_id).y) + " " +
-                      std::to_string(players.at(my_id).rot));
+          std::string("2\n" + std::to_string(game.players.at(my_id).x) + " " +
+                      std::to_string(game.players.at(my_id).y) + " " +
+                      std::to_string(game.players.at(my_id).rot));
       send_message(msg, sock);
 
       server_update_counter = 0;
     }
 
-    move_players(&players, my_id);
+    move_players(&game.players, my_id);
 
     for (Bullet &b : bullets)
       b.move();
@@ -398,17 +401,17 @@ int main() {
       canshoot = false;
       bdelay = 20;
       float bspeed = 10;
-      float angleRad = (-players[my_id].rot + 5) * DEG2RAD;
+      float angleRad = (-game.players[my_id].rot + 5) * DEG2RAD;
       Vector2 dir = Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -bspeed);
       Vector2 spawnOffset =
           Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -120);
-      Vector2 origin = {(float)players[my_id].x + 50,
-                        (float)players[my_id].y + 50};
+      Vector2 origin = {(float)game.players[my_id].x + 50,
+                        (float)game.players[my_id].y + 50};
       Vector2 spawnPos = Vector2Add(origin, spawnOffset);
       bullets.push_back(Bullet(spawnPos.x, spawnPos.y, dir));
 
       send_message(
-          std::string("10\n ").append(std::to_string(players[my_id].rot)),
+          std::string("10\n ").append(std::to_string(game.players[my_id].rot)),
           sock);
     }
 
@@ -416,7 +419,8 @@ int main() {
 
     float dt = GetFrameTime();
 
-    cam.target = {(float)players[my_id].x - 350, (float)players[my_id].y - 250};
+    cam.target = {(float)game.players[my_id].x - 350,
+                  (float)game.players[my_id].y - 250};
 
     BeginDrawing();
 
@@ -432,14 +436,14 @@ int main() {
       }
     }
 
-    draw_players(players, player_textures);
+    draw_players(game.players, player_textures);
 
     for (Bullet &b : bullets)
       b.show();
 
     EndMode2D();
 
-    draw_ui(mycolor, players, my_id, bdelay);
+    draw_ui(mycolor, game.players, my_id, bdelay);
 
     EndDrawing();
   }
