@@ -195,17 +195,37 @@ void handle_packets(Game *game, int *my_id) {
 void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
                         playermap *players, int my_id, int *mycolor,
                         Color options[5]) {
+
   BeginDrawing();
   ClearBackground(BLACK);
-  DrawText("Pick a username", 50, 50, 64, WHITE);
+  
+  BeginUiDrawing();
+  DrawTextScale("Pick a username", 50, 50, 64, WHITE);
 
-  DrawText(std::to_string(10 - (*usernameprompt).length())
-               .append(" characters left.")
-               .c_str(),
-           50, 215, 32, (*usernameprompt).length() < 10 ? WHITE : RED);
-  DrawRectangle(50, 125, 500, 75, BLUE);
+  DrawTextScale((std::to_string(10 - (*usernameprompt).length())
+                 .append(" characters left."))
+                    .c_str(),
+                50, 215,
+           32, (*usernameprompt).length() < 10 ? WHITE : RED);
+  DrawRectangleScale(50, 125, 500, 75, BLUE);
 
-  DrawText((*usernameprompt).c_str(), 75, 150, 48, BLACK);
+  DrawTextScale((*usernameprompt).c_str(), 75, 150, 48, BLACK);
+
+  // Color Pick
+  DrawTextScale("Choose color:", 50, 300, 32, WHITE);
+
+  int x = 50;
+
+  for (int i = 0; i < 5; i++) {
+    Color cc = options[i];
+    if (color_equal(cc, options[*mycolor])) {
+      DrawSquareScale(x - 10, 340, 70, WHITE);
+    }
+    DrawSquareScale(x, 350, 50, cc);
+
+    x += 100;
+  }
+  EndUiDrawing();
 
   char k = GetCharPressed();
 
@@ -225,21 +245,6 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
                  sock);
   }
 
-  // Color Pick
-  DrawText("Choose color:", 50, 300, 32, WHITE);
-
-  int x = 50;
-
-  for (int i = 0; i < 5; i++) {
-    Color cc = options[i];
-    if (color_equal(cc, options[*mycolor])) {
-      DrawRectangle(x - 10, 340, 70, 70, WHITE);
-    }
-    DrawRectangle(x, 350, 50, 50, cc);
-
-    x += 100;
-  }
-
   if (IsKeyPressed(KEY_LEFT))
     (*mycolor)--;
   if (IsKeyPressed(KEY_RIGHT))
@@ -253,11 +258,25 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
 }
 
 void draw_ui(Color mycolor, playermap players, int my_id, int bd) {
-  DrawRectangle(0, 500, 300, 100, DARKBLUE);
-  DrawRectangle(10, 510, 80, 80, mycolor);
-  DrawText(players[my_id].username.c_str(), 100, 515, 24, BLACK);
+  BeginUiDrawing();
+  
+  // Calculate width needed based on content
+  float contentWidth = 100 + (bd != 0 ? bd * 2 : 0) + 10; // square width + cooldown width + padding
+  
+  // Draw background just wide enough for content
+  DrawRectangleScale(0, 500, 300, 100, DARKGRAY);
+  
+  // Player color square
+  DrawSquareScale(10, 510, 80, mycolor);
+  
+  // Username text aligned with the square
+  DrawTextScale(players[my_id].username.c_str(), 100, 525, 24, WHITE);
+  
+  // Cooldown bar aligned with username
   if (bd != 0)
-    DrawRectangle(100, 540, bd * 2, 10, GREEN);
+    DrawRectangleScale(100, 555, bd * 2, 10, GREEN);
+  
+  EndUiDrawing();
 }
 
 void draw_players(playermap players,
@@ -278,8 +297,10 @@ void draw_players(playermap players,
   }
 }
 
-bool move_gun(float *rot, int cx, int cy) {
-  Vector2 delta = Vector2Subtract((Vector2){400, 300}, GetMousePosition());
+bool move_gun(float *rot, int cx, int cy, Camera2D cam) {
+  Vector2 mousePos = GetScreenToWorld2D(GetMousePosition(), cam);
+  Vector2 playerCenter = {(float)cx + 50, (float)cy + 50};
+  Vector2 delta = Vector2Subtract(playerCenter, mousePos);
   float angle = atan2f(delta.y, delta.x) * RAD2DEG;
   float oldrot = *rot;
   *rot = fmod(angle + 360.0f, 360.0f);
@@ -295,13 +316,13 @@ void move_players(playermap *players, int skip) {
       if (v.x < v.nx)
         v.x += v.speed;
       if (v.x > v.nx)
-        v.x -= v.speed;
+        v.x -= v.x;
     }
     if (v.y != v.ny) {
       if (v.y < v.ny)
         v.y += v.speed;
       if (v.y > v.ny)
-        v.y -= v.speed;
+        v.y -= v.y;
     }
   }
 }
@@ -361,6 +382,9 @@ int main() {
   cam.offset = {0.0f, 0.0f};
 
   while (!WindowShouldClose() && running) {
+    cam.zoom = (GetScreenWidth() / window_size.x + GetScreenHeight() / window_size.y) / 2;
+    // cam.offset = {(float)GetScreenWidth() / 3.0f, (float)GetScreenHeight() / 3.0f};
+
     int cx = game.players[my_id].x;
     int cy = game.players[my_id].y;
 
@@ -371,8 +395,8 @@ int main() {
     if (my_id == -1) {
       BeginDrawing();
       ClearBackground(BLACK);
-      DrawText("waiting for server...", 50, 50, 48, GREEN);
-      DrawText("loading...", 50, 100, 32, GREEN);
+      DrawTextScale("waiting for server...", 50, 50, 48, GREEN);
+      DrawTextScale("loading...", 50, 100, 32, GREEN);
       EndDrawing();
       continue;
     }
@@ -392,7 +416,7 @@ int main() {
     server_update_counter++;
 
     bool moved = game.players.at(my_id).move();
-    bool moved_gun = move_gun(&game.players[my_id].rot, cx, cy);
+    bool moved_gun = move_gun(&game.players[my_id].rot, cx, cy, cam);
 
     hasmoved = moved || moved_gun;
 
