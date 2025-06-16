@@ -6,6 +6,7 @@
 #include "raylib.h"
 #include "raymath.h"
 #include "utils.hpp"
+#include "constants.hpp"
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdio>
@@ -482,9 +483,10 @@ int main() {
 
     BeginMode2D(cam);
 
-    for (int i = 0; i < 200; i++) {
-      for (int j = 0; j < 200; j++) {
-        DrawTexture(floorTexture, i * 100, j * 100, WHITE);
+    // Draw floor tiles based on PLAYING_AREA
+    for (int i = 0; i < PLAYING_AREA.width/TILE_SIZE; i++) {
+      for (int j = 0; j < PLAYING_AREA.height/TILE_SIZE; j++) {
+        DrawTexture(floorTexture, i * TILE_SIZE, j * TILE_SIZE, WHITE);
       }
     }
 
