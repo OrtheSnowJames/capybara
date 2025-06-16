@@ -200,28 +200,28 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
   ClearBackground(BLACK);
   
   BeginUiDrawing();
-  DrawTextScale("Pick a username", 50, 50, 64, WHITE);
+  DrawTextScaleCentered("Pick a username", 50, 50, 64, WHITE);
 
-  DrawTextScale((std::to_string(10 - (*usernameprompt).length())
+  DrawTextScaleCentered((std::to_string(10 - (*usernameprompt).length())
                  .append(" characters left."))
                     .c_str(),
                 50, 215,
            32, (*usernameprompt).length() < 10 ? WHITE : RED);
-  DrawRectangleScale(50, 125, 500, 75, BLUE);
+  DrawRectangleScaleCentered(50, 125, 500, 75, BLUE);
 
-  DrawTextScale((*usernameprompt).c_str(), 75, 150, 48, BLACK);
+  DrawTextScaleCentered((*usernameprompt).c_str(), 75, 150, 48, BLACK);
 
   // Color Pick
-  DrawTextScale("Choose color:", 50, 300, 32, WHITE);
+  DrawTextScaleCentered("Choose color:", 50, 300, 32, WHITE);
 
   int x = 50;
 
   for (int i = 0; i < 5; i++) {
     Color cc = options[i];
     if (color_equal(cc, options[*mycolor])) {
-      DrawSquareScale(x - 10, 340, 70, WHITE);
+      DrawSquareScaleCentered(x - 10, 340, 70, WHITE);
     }
-    DrawSquareScale(x, 350, 50, cc);
+    DrawSquareScaleCentered(x, 350, 50, cc);
 
     x += 100;
   }
@@ -260,21 +260,29 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
 void draw_ui(Color mycolor, playermap players, int my_id, int bd) {
   BeginUiDrawing();
   
-  // Calculate width needed based on content
-  float contentWidth = 100 + (bd != 0 ? bd * 2 : 0) + 10; // square width + cooldown width + padding
+  // Calculate text width
+  float textWidth = MeasureText(players[my_id].username.c_str(), 24);
   
-  // Draw background just wide enough for content
-  DrawRectangleScale(0, 500, 300, 100, DARKGRAY);
+  // Base dimensions (before scaling)
+  float boxHeight = 50;
+  float boxWidth = boxHeight * 2;
+  float padding = 5;
   
-  // Player color square
-  DrawSquareScale(10, 510, 80, mycolor);
+  // Position at bottom of window_size
+  float y = window_size.y - boxHeight;
+  
+  // Draw background
+  DrawRectangleScale(0, y, boxWidth, boxHeight, DARKGRAY);
+  
+  // Player color square (40x40)
+  DrawSquareScale(padding, y + (boxHeight - 40)/2, 40, mycolor);
   
   // Username text aligned with the square
-  DrawTextScale(players[my_id].username.c_str(), 100, 525, 24, WHITE);
+  DrawTextScale(players[my_id].username.c_str(), 50, y + padding, 24, WHITE);
   
   // Cooldown bar aligned with username
   if (bd != 0)
-    DrawRectangleScale(100, 555, bd * 2, 10, GREEN);
+    DrawRectangleScale(50, y + boxHeight - padding - 10, bd * 2, 10, GREEN);
   
   EndUiDrawing();
 }

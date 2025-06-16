@@ -8,7 +8,45 @@ float GetMinScaleRatio() {
     return (widthScaleRatio < heightScaleRatio) ? widthScaleRatio : heightScaleRatio;
 }
 
+// Bottom-left anchored versions
 void DrawRectangleScale(float x, float y, float width, float height, Color color) {
+    float scaleRatio = GetMinScaleRatio();
+    
+    DrawRectangle(
+        x * scaleRatio,
+        GetScreenHeight() - ((window_size.y - y) * scaleRatio),
+        width * scaleRatio,
+        height * scaleRatio,
+        color
+    );
+}
+
+void DrawSquareScale(float x, float y, float size, Color color) {
+    float scaleRatio = GetMinScaleRatio();
+    
+    DrawRectangle(
+        x * scaleRatio,
+        GetScreenHeight() - ((window_size.y - y) * scaleRatio),
+        size * scaleRatio,
+        size * scaleRatio,
+        color
+    );
+}
+
+void DrawTextScale(const char *text, float x, float y, float size, Color color) {
+    float scaleRatio = GetMinScaleRatio();
+    
+    DrawText(
+        text,
+        x * scaleRatio,
+        GetScreenHeight() - ((window_size.y - y) * scaleRatio),
+        size * scaleRatio,
+        color
+    );
+}
+
+// Centered versions
+void DrawRectangleScaleCentered(float x, float y, float width, float height, Color color) {
     float scaleRatio = GetMinScaleRatio();
     float offsetX = (GetScreenWidth() - (window_size.x * scaleRatio)) / 2;
     float offsetY = (GetScreenHeight() - (window_size.y * scaleRatio)) / 2;
@@ -22,7 +60,7 @@ void DrawRectangleScale(float x, float y, float width, float height, Color color
     );
 }
 
-void DrawSquareScale(float x, float y, float size, Color color) {
+void DrawSquareScaleCentered(float x, float y, float size, Color color) {
     float scaleRatio = GetMinScaleRatio();
     float offsetX = (GetScreenWidth() - (window_size.x * scaleRatio)) / 2;
     float offsetY = (GetScreenHeight() - (window_size.y * scaleRatio)) / 2;
@@ -36,7 +74,7 @@ void DrawSquareScale(float x, float y, float size, Color color) {
     );
 }
 
-void DrawTextScale(const char *text, float x, float y, float size, Color color) {
+void DrawTextScaleCentered(const char *text, float x, float y, float size, Color color) {
     float scaleRatio = GetMinScaleRatio();
     float offsetX = (GetScreenWidth() - (window_size.x * scaleRatio)) / 2;
     float offsetY = (GetScreenHeight() - (window_size.y * scaleRatio)) / 2;
