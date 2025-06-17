@@ -26,19 +26,19 @@ Click in the direction you want to shoot to shoot. This will fire a bullet.
 2. Compile
    ```sh
    # server
-   g++ -o server server.cpp
+   g++ -o bin/server src/server.cpp
 
    # client
-   g++ -o client client.cpp -lraylib
+   g++ -o bin/client src/client.cpp -lraylib
    ```
 
 ### Server
 ```sh
-./server
+bin/server
 ```
 
 ### Client
 ```sh
 # to connect to localhost:50000
-./client
+bin/client
 ```
