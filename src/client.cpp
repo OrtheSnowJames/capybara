@@ -258,34 +258,39 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
   EndDrawing();
 }
 
-void draw_ui(Color mycolor, playermap players, int my_id, int bd, Camera2D cam, float scale) {
+void draw_ui(Color mycolor, playermap players, int my_id, int shoot_cooldown, Camera2D cam, float scale) {
   BeginUiDrawing();
   
   // Base dimensions for UI elements
   float boxHeight = 50;
-  float boxWidth = boxHeight * 2;
   float padding = 5;
   float squareSize = 40;
   float textSize = 24;
+  float textPadding = 50;
+  float textWidth = MeasureText(players[my_id].username.c_str(), textSize);
+  float boxWidth = textPadding + textWidth + (padding * 2);
 
   // fix name clipping out of box
-  if (boxWidth < MeasureText(players[my_id].username.c_str(), textSize) + padding * 2) { 
-    boxWidth = MeasureText(players[my_id].username.c_str(), textSize) + padding * 2;
+  if (boxWidth < squareSize + padding * 2) {
+    boxWidth = squareSize + padding * 2;
   }
   
-  // Position at bottom of render texture (not screen)
+  // position at bottom of render texture (not screen)
   float y = window_size.y - boxHeight;
   
   // background
   DrawRectangle(0, y, boxWidth, boxHeight, DARKGRAY);
   
   // player info
-  DrawRectangle(padding, y + (boxHeight - squareSize)/2, squareSize, squareSize, mycolor);  
-  DrawText(players[my_id].username.c_str(), 50, y + padding, textSize, WHITE);
+  DrawRectangle(padding, y + (boxHeight - squareSize)/2, squareSize, squareSize, mycolor);
+  DrawText(players[my_id].username.c_str(), textPadding, y + (boxHeight - textSize)/2, textSize, WHITE);
   
-  // shooting cooldown bar
-  if (bd != 0)
-    DrawRectangle(50, y + boxHeight - padding - 10, bd * 2, 10, GREEN);
+  // cooldown bar
+  if (shoot_cooldown != 0) {
+    float barHeight = 10;
+    float barY = y + boxHeight - padding - barHeight;
+    DrawRectangle(textPadding, barY, shoot_cooldown * 2, barHeight, GREEN);
+  }
   
   EndUiDrawing();
 }
