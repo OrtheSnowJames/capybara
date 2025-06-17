@@ -258,32 +258,34 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
   EndDrawing();
 }
 
-void draw_ui(Color mycolor, playermap players, int my_id, int bd) {
+void draw_ui(Color mycolor, playermap players, int my_id, int bd, Camera2D cam, float scale) {
   BeginUiDrawing();
   
-  // Calculate text width
-  float textWidth = MeasureText(players[my_id].username.c_str(), 24);
-  
-  // Base dimensions (before scaling)
+  // Base dimensions for UI elements
   float boxHeight = 50;
   float boxWidth = boxHeight * 2;
   float padding = 5;
+  float squareSize = 40;
+  float textSize = 24;
+
+  // fix name clipping out of box
+  if (boxWidth < MeasureText(players[my_id].username.c_str(), textSize) + padding * 2) { 
+    boxWidth = MeasureText(players[my_id].username.c_str(), textSize) + padding * 2;
+  }
   
-  // Position at bottom of window_size
+  // Position at bottom of render texture (not screen)
   float y = window_size.y - boxHeight;
   
-  // Draw background
-  DrawRectangleScale(0, y, boxWidth, boxHeight, DARKGRAY);
+  // background
+  DrawRectangle(0, y, boxWidth, boxHeight, DARKGRAY);
   
-  // Player color square (40x40)
-  DrawSquareScale(padding, y + (boxHeight - 40)/2, 40, mycolor);
+  // player info
+  DrawRectangle(padding, y + (boxHeight - squareSize)/2, squareSize, squareSize, mycolor);  
+  DrawText(players[my_id].username.c_str(), 50, y + padding, textSize, WHITE);
   
-  // Username text aligned with the square
-  DrawTextScale(players[my_id].username.c_str(), 50, y + padding, 24, WHITE);
-  
-  // Cooldown bar aligned with username
+  // shooting cooldown bar
   if (bd != 0)
-    DrawRectangleScale(50, y + boxHeight - padding - 10, bd * 2, 10, GREEN);
+    DrawRectangle(50, y + boxHeight - padding - 10, bd * 2, 10, GREEN);
   
   EndUiDrawing();
 }
@@ -306,8 +308,18 @@ void draw_players(playermap players,
   }
 }
 
-bool move_gun(float *rot, int cx, int cy, Camera2D cam) {
-  Vector2 mousePos = GetScreenToWorld2D(GetMousePosition(), cam);
+bool move_gun(float *rot, int cx, int cy, Camera2D cam, float scale, float offsetX, float offsetY) {
+  // mouse position in window
+  Vector2 windowMouse = GetMousePosition();
+  
+  // mouse position in render texture
+  Vector2 renderMouse = {
+    (windowMouse.x - offsetX) / scale,
+    (windowMouse.y - offsetY) / scale
+  };
+  
+  // mouse position in world space
+  Vector2 mousePos = GetScreenToWorld2D(renderMouse, cam);
   Vector2 playerCenter = {(float)cx + 50, (float)cy + 50};
   Vector2 delta = Vector2Subtract(playerCenter, mousePos);
   float angle = atan2f(delta.y, delta.x) * RAD2DEG;
@@ -390,10 +402,15 @@ int main() {
   cam.rotation = 0.0f;
   cam.offset = {0.0f, 0.0f};
 
-  while (!WindowShouldClose() && running) {
-    cam.zoom = (GetScreenWidth() / window_size.x + GetScreenHeight() / window_size.y) / 2;
-    // cam.offset = {(float)GetScreenWidth() / 3.0f, (float)GetScreenHeight() / 3.0f};
+  // create render texture to draw game at normal res
+  RenderTexture2D target = LoadRenderTexture(window_size.x, window_size.y);
 
+  while (!WindowShouldClose() && running) {
+    // calculate zoom based on actual window size relative to normal window size
+    float widthRatio = (float)GetScreenWidth() / window_size.x;
+    float heightRatio = (float)GetScreenHeight() / window_size.y;
+    float scale = (widthRatio < heightRatio) ? widthRatio : heightRatio;
+    
     int cx = game.players[my_id].x;
     int cy = game.players[my_id].y;
 
@@ -425,7 +442,13 @@ int main() {
     server_update_counter++;
 
     bool moved = game.players.at(my_id).move();
-    bool moved_gun = move_gun(&game.players[my_id].rot, cx, cy, cam);
+    
+    float scaledWidth = window_size.x * scale;
+    float scaledHeight = window_size.y * scale;
+    float offsetX = (GetScreenWidth() - scaledWidth) * 0.5f;
+    float offsetY = (GetScreenHeight() - scaledHeight) * 0.5f;
+    
+    bool moved_gun = move_gun(&game.players[my_id].rot, cx, cy, cam, scale, offsetX, offsetY);
 
     hasmoved = moved || moved_gun;
 
@@ -468,18 +491,9 @@ int main() {
           sock);
     }
 
-    // ------------------------------------------------------------------------------
-
-    float dt = GetFrameTime();
-
-    cam.target = {(float)game.players[my_id].x - 350,
-                  (float)game.players[my_id].y - 250};
-
-    BeginDrawing();
-
+    // draw to render texture
+    BeginTextureMode(target);
     ClearBackground(BLUE);
-
-    DrawFPS(2, 2);
 
     BeginMode2D(cam);
 
@@ -497,11 +511,25 @@ int main() {
 
     EndMode2D();
 
-    draw_ui(mycolor, game.players, my_id, bdelay);
+    // Draw HUD after EndMode2D but still in render texture
+    draw_ui(mycolor, game.players, my_id, bdelay, cam, scale);
+    
+    EndTextureMode();
+
+    // draw the scaled render texture to the window
+    BeginDrawing();
+    ClearBackground(BLACK);
+
+    // render texture to window
+    Rectangle source = {0, 0, (float)target.texture.width, (float)-target.texture.height};
+    Rectangle dest = {offsetX, offsetY, scaledWidth, scaledHeight};
+    DrawTexturePro(target.texture, source, dest, (Vector2){0, 0}, 0.0f, WHITE);
 
     EndDrawing();
   }
 
+  // Cleanup
+  UnloadRenderTexture(target);
   std::cout << "Closing.\n";
 
   running = false;
@@ -513,3 +541,4 @@ int main() {
 
   CloseWindow();
 }
+
