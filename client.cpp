@@ -1,4 +1,5 @@
 #include "bullet.hpp"
+#include "codes.hpp"
 #include "game.hpp"
 #include "math.h"
 #include "player.hpp"
@@ -55,12 +56,8 @@ void handle_packet(int packet_type, std::string payload, Game *game,
   std::istringstream in(payload);
   std::vector<std::string> msg_split;
 
-  if (packet_type != 2) {
-    std::cout << payload << std::endl;
-  }
-
   switch (packet_type) {
-  case 0:
+  case MSG_GAME_STATE:
     // remove trailing semicolon if present
     if (!payload.empty() && payload.back() == ';') {
       payload.pop_back();
@@ -106,11 +103,10 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       }
     }
     break;
-
-  case 1:
+  case MSG_CLIENT_ID:
     in >> *my_id;
     break;
-  case 2: {
+  case MSG_PLAYER_MOVE: {
     std::istringstream i(payload);
     int id, x, y;
     float rot;
@@ -123,7 +119,7 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     }
 
   } break;
-  case 3:
+  case MSG_PLAYER_NEW:
     split(payload, " ", msg_split);
     {
       int id = std::stoi(msg_split.at(0));
@@ -137,15 +133,15 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     }
 
     break;
-  case 4:
+  case MSG_PLAYER_LEFT:
     if ((*game).players.find(std::stoi(payload)) != (*game).players.end())
       (*game).players.erase(std::stoi(payload));
     break;
-  case 5: {
+  case MSG_PLAYER_NAME: {
     split(payload, std::string(" "), msg_split);
     (*game).players.at(std::stoi(msg_split[0])).username = msg_split[1];
   } break;
-  case 6: {
+  case MSG_PLAYER_COLOR: {
     split(payload, std::string(" "), msg_split);
     if ((*game).players.find(std::stoi(msg_split[0])) !=
         (*game).players.end()) {
@@ -299,7 +295,6 @@ int main() {
   }
 
   std::thread recv_thread(do_recv);
-
   InitWindow(800, 600, "Multi Ludens");
 
   SetTargetFPS(60);
