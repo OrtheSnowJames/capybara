@@ -3,6 +3,7 @@
 #include "constants.hpp"
 #include "drawScale.hpp"
 #include "game.hpp"
+#include "game_config.hpp"
 #include "math.h"
 #include "player.hpp"
 #include "raylib.h"
@@ -197,7 +198,8 @@ void handle_packets(Game *game, int *my_id) {
 
 void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
                         playermap *players, int my_id, int *mycolor,
-                        Color options[5]) {
+                        Color options[5], GameConfig *game_conf,
+                        int *settings_saved_indicator_timer) {
 
   BeginDrawing();
   ClearBackground(BLACK);
@@ -217,6 +219,11 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
   // Color Pick
   DrawTextScaleCentered("Choose color:", 50, 300, 32, WHITE);
 
+  DrawTextScaleCentered(
+      *settings_saved_indicator_timer == 0 ? "Press ';' to save settings"
+                                           : "Settings saved successfully",
+      50, 450, 32, *settings_saved_indicator_timer == 0 ? WHITE : GREEN);
+
   int x = 50;
 
   for (int i = 0; i < 5; i++) {
@@ -228,9 +235,18 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
 
     x += 100;
   }
-  EndUiDrawing();
 
   char k = GetCharPressed();
+
+  if (*settings_saved_indicator_timer == 0 && k == ';') {
+    game_conf->colorindex = *mycolor;
+    game_conf->username = *usernameprompt;
+    game_conf->save();
+
+    *settings_saved_indicator_timer = 120;
+  }
+
+  EndUiDrawing();
 
   if (k != 0 && k != '\n' && k != ':' && k != ' ' && k != ';' &&
       (*usernameprompt).length() < 10) {
@@ -263,6 +279,8 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
 void draw_ui(Color mycolor, playermap players, int my_id, int shoot_cooldown,
              Camera2D cam, float scale) {
   BeginUiDrawing();
+
+  DrawFPS(0, 0);
 
   // Base dimensions for UI elements
   float boxHeight = 50;
@@ -371,6 +389,8 @@ int main() {
   std::thread recv_thread(do_recv);
   InitWindow(800, 600, "Multi Ludens");
 
+  SetWindowState(FLAG_WINDOW_RESIZABLE);
+
   SetTargetFPS(60);
 
   ResourceManager res_man;
@@ -378,16 +398,19 @@ int main() {
   std::vector<Bullet> bullets;
 
   Game game;
+  GameConfig g_conf;
+  g_conf.load();
 
   int my_id = -1;
   int server_update_counter = 0;
   bool hasmoved = false;
   bool usernamechosen = false;
-  std::string usernameprompt;
+  std::string usernameprompt = g_conf.username;
   Color mycolor = BLACK;
-  int colorindex = 0;
+  int colorindex = g_conf.colorindex;
   int bdelay = 20;
   int canshoot = false;
+  int settings_saved_indicator_timer = 0;
 
   Color options[5] = {RED, GREEN, YELLOW, PURPLE, ORANGE};
 
@@ -416,14 +439,16 @@ int main() {
       BeginDrawing();
       ClearBackground(BLACK);
       DrawTextScale("waiting for server...", 50, 50, 48, GREEN);
-      DrawTextScale("loading...", 50, 100, 32, GREEN);
       EndDrawing();
       continue;
     }
 
     if (!usernamechosen) {
+      if (settings_saved_indicator_timer != 0)
+        settings_saved_indicator_timer--;
       do_username_prompt(&usernameprompt, &usernamechosen, &game.players, my_id,
-                         &colorindex, options);
+                         &colorindex, options, &g_conf,
+                         &settings_saved_indicator_timer);
       continue;
     }
 
@@ -495,8 +520,10 @@ int main() {
     // Draw floor tiles based on PLAYING_AREA
     for (int i = 0; i < PLAYING_AREA.width / TILE_SIZE; i++) {
       for (int j = 0; j < PLAYING_AREA.height / TILE_SIZE; j++) {
-        DrawTexture(res_man.getTex("assets/floor_tile.png"), i * TILE_SIZE,
-                    j * TILE_SIZE, WHITE);
+        if (isInViewport(i * TILE_SIZE, j * TILE_SIZE, TILE_SIZE, TILE_SIZE,
+                         cam))
+          DrawTexture(res_man.getTex("assets/floor_tile.png"), i * TILE_SIZE,
+                      j * TILE_SIZE, WHITE);
       }
     }
 

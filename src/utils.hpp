@@ -17,6 +17,15 @@
 typedef std::map<int, Player> playermap;
 typedef std::pair<int, std::shared_ptr<std::thread>> client;
 
+inline bool isInViewport(int x, int y, int width, int height, Camera2D cam) {
+  Rectangle viewport = {cam.target.x - cam.offset.x / cam.zoom,
+                        cam.target.y - cam.offset.y / cam.zoom,
+                        GetScreenWidth() / cam.zoom,
+                        GetScreenHeight() / cam.zoom};
+
+  return CheckCollisionRecs({(float)x, (float)y, (float)width, (float)height},
+                            viewport);
+}
 inline bool color_equal(Color a, Color b) {
   return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
 }
