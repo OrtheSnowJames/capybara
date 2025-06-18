@@ -16,6 +16,7 @@ public:
     x += vel.x;
     y += vel.y;
   }
+
   void show() { DrawCircle(x, y, 10.0f, GRAY); }
 };
 

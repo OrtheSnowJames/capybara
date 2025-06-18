@@ -1,3 +1,4 @@
+#include "constants.hpp"
 #include "game.hpp"
 #include "math.h"
 #include "player.hpp"

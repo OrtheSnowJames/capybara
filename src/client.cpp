@@ -1,12 +1,14 @@
 #include "bullet.hpp"
 #include "codes.hpp"
+#include "constants.hpp"
+#include "drawScale.hpp"
 #include "game.hpp"
 #include "math.h"
 #include "player.hpp"
 #include "raylib.h"
 #include "raymath.h"
+#include "resource_manager.hpp"
 #include "utils.hpp"
-#include "constants.hpp"
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdio>
@@ -199,15 +201,15 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
 
   BeginDrawing();
   ClearBackground(BLACK);
-  
+
   BeginUiDrawing();
   DrawTextScaleCentered("Pick a username", 50, 50, 64, WHITE);
 
   DrawTextScaleCentered((std::to_string(10 - (*usernameprompt).length())
-                 .append(" characters left."))
-                    .c_str(),
-                50, 215,
-           32, (*usernameprompt).length() < 10 ? WHITE : RED);
+                             .append(" characters left."))
+                            .c_str(),
+                        50, 215, 32,
+                        (*usernameprompt).length() < 10 ? WHITE : RED);
   DrawRectangleScaleCentered(50, 125, 500, 75, BLUE);
 
   DrawTextScaleCentered((*usernameprompt).c_str(), 75, 150, 48, BLACK);
@@ -258,9 +260,10 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
   EndDrawing();
 }
 
-void draw_ui(Color mycolor, playermap players, int my_id, int shoot_cooldown, Camera2D cam, float scale) {
+void draw_ui(Color mycolor, playermap players, int my_id, int shoot_cooldown,
+             Camera2D cam, float scale) {
   BeginUiDrawing();
-  
+
   // Base dimensions for UI elements
   float boxHeight = 50;
   float padding = 5;
@@ -274,35 +277,35 @@ void draw_ui(Color mycolor, playermap players, int my_id, int shoot_cooldown, Ca
   if (boxWidth < squareSize + padding * 2) {
     boxWidth = squareSize + padding * 2;
   }
-  
+
   // position at bottom of render texture (not screen)
   float y = window_size.y - boxHeight;
-  
+
   // background
   DrawRectangle(0, y, boxWidth, boxHeight, DARKGRAY);
-  
+
   // player info
-  DrawRectangle(padding, y + (boxHeight - squareSize)/2, squareSize, squareSize, mycolor);
-  DrawText(players[my_id].username.c_str(), textPadding, y + (boxHeight - textSize)/2, textSize, WHITE);
-  
+  DrawRectangle(padding, y + (boxHeight - squareSize) / 2, squareSize,
+                squareSize, mycolor);
+  DrawText(players[my_id].username.c_str(), textPadding,
+           y + (boxHeight - textSize) / 2, textSize, WHITE);
+
   // cooldown bar
   if (shoot_cooldown != 0) {
     float barHeight = 10;
     float barY = y + boxHeight - padding - barHeight;
     DrawRectangle(textPadding, barY, shoot_cooldown * 2, barHeight, GREEN);
   }
-  
+
   EndUiDrawing();
 }
 
-void draw_players(playermap players,
-                  std::map<Color, Texture2D, ColorCompare> player_textures) {
+void draw_players(playermap players, ResourceManager *res_man) {
   for (auto &[id, p] : players) {
     if (p.username == "unset")
       continue;
     Color clr = p.color;
-    if (player_textures.find(clr) != player_textures.end())
-      DrawTexture(player_textures[clr], p.x, p.y, WHITE);
+    DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
 
     DrawText(p.username.c_str(),
              p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
@@ -313,16 +316,15 @@ void draw_players(playermap players,
   }
 }
 
-bool move_gun(float *rot, int cx, int cy, Camera2D cam, float scale, float offsetX, float offsetY) {
+bool move_gun(float *rot, int cx, int cy, Camera2D cam, float scale,
+              float offsetX, float offsetY) {
   // mouse position in window
   Vector2 windowMouse = GetMousePosition();
-  
+
   // mouse position in render texture
-  Vector2 renderMouse = {
-    (windowMouse.x - offsetX) / scale,
-    (windowMouse.y - offsetY) / scale
-  };
-  
+  Vector2 renderMouse = {(windowMouse.x - offsetX) / scale,
+                         (windowMouse.y - offsetY) / scale};
+
   // mouse position in world space
   Vector2 mousePos = GetScreenToWorld2D(renderMouse, cam);
   Vector2 playerCenter = {(float)cx + 50, (float)cy + 50};
@@ -371,24 +373,11 @@ int main() {
 
   SetTargetFPS(60);
 
-  Image floorImage = LoadImage("floor_tile.png");
-  ImageResizeNN(&floorImage, 100, 100);
-  Texture2D floorTexture = LoadTextureFromImage(floorImage);
-  Game game;
+  ResourceManager res_man;
+
   std::vector<Bullet> bullets;
 
-  std::map<Color, Texture2D, ColorCompare> player_textures;
-  player_textures[RED] = LoadTexture("player_red.png");
-  player_textures[GREEN] = LoadTexture("player_green.png");
-  player_textures[YELLOW] = LoadTexture("player_yellow.png");
-  player_textures[PURPLE] = LoadTexture("player_purple.png");
-  player_textures[ORANGE] = LoadTexture("player_orangle.png");
-
-  for (auto &[_, v] : player_textures) {
-    Image a = LoadImageFromTexture(v);
-    ImageResizeNN(&a, 100, 100);
-    v = LoadTextureFromImage(a);
-  }
+  Game game;
 
   int my_id = -1;
   int server_update_counter = 0;
@@ -415,7 +404,7 @@ int main() {
     float widthRatio = (float)GetScreenWidth() / window_size.x;
     float heightRatio = (float)GetScreenHeight() / window_size.y;
     float scale = (widthRatio < heightRatio) ? widthRatio : heightRatio;
-    
+
     int cx = game.players[my_id].x;
     int cy = game.players[my_id].y;
 
@@ -447,13 +436,14 @@ int main() {
     server_update_counter++;
 
     bool moved = game.players.at(my_id).move();
-    
+
     float scaledWidth = window_size.x * scale;
     float scaledHeight = window_size.y * scale;
     float offsetX = (GetScreenWidth() - scaledWidth) * 0.5f;
     float offsetY = (GetScreenHeight() - scaledHeight) * 0.5f;
-    
-    bool moved_gun = move_gun(&game.players[my_id].rot, cx, cy, cam, scale, offsetX, offsetY);
+
+    bool moved_gun = move_gun(&game.players[my_id].rot, cx, cy, cam, scale,
+                              offsetX, offsetY);
 
     hasmoved = moved || moved_gun;
 
@@ -503,13 +493,14 @@ int main() {
     BeginMode2D(cam);
 
     // Draw floor tiles based on PLAYING_AREA
-    for (int i = 0; i < PLAYING_AREA.width/TILE_SIZE; i++) {
-      for (int j = 0; j < PLAYING_AREA.height/TILE_SIZE; j++) {
-        DrawTexture(floorTexture, i * TILE_SIZE, j * TILE_SIZE, WHITE);
+    for (int i = 0; i < PLAYING_AREA.width / TILE_SIZE; i++) {
+      for (int j = 0; j < PLAYING_AREA.height / TILE_SIZE; j++) {
+        DrawTexture(res_man.getTex("assets/floor_tile.png"), i * TILE_SIZE,
+                    j * TILE_SIZE, WHITE);
       }
     }
 
-    draw_players(game.players, player_textures);
+    draw_players(game.players, &res_man);
 
     for (Bullet &b : bullets)
       b.show();
@@ -518,7 +509,7 @@ int main() {
 
     // Draw HUD after EndMode2D but still in render texture
     draw_ui(mycolor, game.players, my_id, bdelay, cam, scale);
-    
+
     EndTextureMode();
 
     // draw the scaled render texture to the window
@@ -526,7 +517,8 @@ int main() {
     ClearBackground(BLACK);
 
     // render texture to window
-    Rectangle source = {0, 0, (float)target.texture.width, (float)-target.texture.height};
+    Rectangle source = {0, 0, (float)target.texture.width,
+                        (float)-target.texture.height};
     Rectangle dest = {offsetX, offsetY, scaledWidth, scaledHeight};
     DrawTexturePro(target.texture, source, dest, (Vector2){0, 0}, 0.0f, WHITE);
 
@@ -546,4 +538,3 @@ int main() {
 
   CloseWindow();
 }
-
