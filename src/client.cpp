@@ -18,6 +18,7 @@
 #include <map>
 #include <mutex>
 #include <netinet/in.h>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <sys/socket.h>
@@ -116,6 +117,9 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     float rot;
     i >> id >> x >> y >> rot;
 
+    if (id == *my_id)
+      break;
+
     if ((*game).players.find(id) != (*game).players.end()) {
       (*game).players.at(id).nx = x;
       (*game).players.at(id).ny = y;
@@ -160,8 +164,8 @@ void handle_packet(int packet_type, std::string payload, Game *game,
 
     j >> from_id >> x >> y >> rot;
 
-    if (from_id == *my_id)
-      break;
+    // if (from_id == *my_id)
+    //   break;
 
     float angleRad = (-rot + 5) * DEG2RAD;
     float bspeed = 10;
@@ -171,7 +175,7 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     std::cout << from_id << ' ' << x << ' ' << y << ' ' << ' ' << dir.x << ' '
               << dir.y << std::endl;
 
-    (*game).bullets.push_back(Bullet(x, y, dir));
+    (*game).bullets.push_back(Bullet(x, y, dir, from_id));
 
     std::cout << "added bullet at " << x << ' ' << y << " with dir " << dir.x
               << ' ' << dir.y << std::endl;
@@ -197,8 +201,8 @@ void handle_packets(Game *game, int *my_id) {
 }
 
 void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
-                        playermap *players, int my_id, int *mycolor,
-                        Color options[5], GameConfig *game_conf,
+                        int my_id, int *mycolor, Color options[5],
+                        GameConfig *game_conf,
                         int *settings_saved_indicator_timer) {
 
   BeginDrawing();
@@ -256,10 +260,10 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
     (*usernameprompt).pop_back();
 
   if (IsKeyPressed(KEY_ENTER) && !(*usernameprompt).empty() && my_id != -1) {
-    (*players)[my_id].username = *usernameprompt;
     *usernamechosen = true;
+    game_conf->username = *usernameprompt;
+    game_conf->colorindex = *mycolor;
     send_message(std::string("5\n").append(*usernameprompt), sock);
-    sleep(2);
     send_message("6\n" + std::to_string(color_to_uint(options[*mycolor])),
                  sock);
   }
@@ -274,6 +278,21 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
     *mycolor = 0;
 
   EndDrawing();
+}
+
+void manage_username_prompt(playermap *players, int my_id, Color options[5],
+                            GameConfig *game_conf) {
+  std::string usernameprompt = game_conf->username;
+  bool usernamechosen = false;
+  int clrindex = game_conf->colorindex;
+  int settings_saved_indicator_timer = 0;
+
+  while (!usernamechosen && running && !WindowShouldClose()) {
+    if (settings_saved_indicator_timer != 0)
+      settings_saved_indicator_timer--;
+    do_username_prompt(&usernameprompt, &usernamechosen, my_id, &clrindex,
+                       options, game_conf, &settings_saved_indicator_timer);
+  }
 }
 
 void draw_ui(Color mycolor, playermap players, int my_id, int shoot_cooldown,
@@ -354,23 +373,20 @@ bool move_gun(float *rot, int cx, int cy, Camera2D cam, float scale,
   return *rot == oldrot;
 }
 
-void move_players(playermap *players, int skip) {
-  for (auto &[k, v] : *players) {
-    if (k == skip)
-      continue;
-    if (v.x != v.nx) {
-      if (v.x < v.nx)
-        v.x += v.speed;
-      if (v.x > v.nx)
-        v.x -= v.x;
-    }
-    if (v.y != v.ny) {
-      if (v.y < v.ny)
-        v.y += v.speed;
-      if (v.y > v.ny)
-        v.y -= v.y;
-    }
-  }
+void move_camera(Camera2D *cam, int cx, int cy) {
+  cam->target = (Vector2){(float)cx - 350, (float)cy - 250};
+  if (cam->target.x - cam->offset.x / cam->zoom < 0)
+    cam->target.x = 0;
+  if ((cam->target.x - cam->offset.x / cam->zoom) +
+          GetScreenWidth() / cam->zoom >
+      PLAYING_AREA.width)
+    cam->target.x = PLAYING_AREA.width - (GetScreenWidth() / cam->zoom);
+  if (cam->target.y - cam->offset.y / cam->zoom < 0)
+    cam->target.y = 0;
+  if ((cam->target.y - cam->offset.y / cam->zoom) +
+          GetScreenHeight() / cam->zoom >
+      PLAYING_AREA.height)
+    cam->target.y = PLAYING_AREA.height - (GetScreenHeight() / cam->zoom);
 }
 
 int main() {
@@ -395,8 +411,6 @@ int main() {
 
   ResourceManager res_man;
 
-  std::vector<Bullet> bullets;
-
   Game game;
   GameConfig g_conf;
   g_conf.load();
@@ -404,21 +418,17 @@ int main() {
   int my_id = -1;
   int server_update_counter = 0;
   bool hasmoved = false;
-  bool usernamechosen = false;
-  std::string usernameprompt = g_conf.username;
-  Color mycolor = BLACK;
-  int colorindex = g_conf.colorindex;
   int bdelay = 20;
   int canshoot = false;
-  int settings_saved_indicator_timer = 0;
 
   Color options[5] = {RED, GREEN, YELLOW, PURPLE, ORANGE};
+
+  bool usernamechosen = false;
 
   Camera2D cam;
   cam.zoom = 1.0f;
   cam.rotation = 0.0f;
-  cam.offset = {0.0f, 0.0f};
-
+  cam.offset = (Vector2){0.0f, 0.0f};
   // create render texture to draw game at normal res
   RenderTexture2D target = LoadRenderTexture(window_size.x, window_size.y);
 
@@ -431,7 +441,7 @@ int main() {
     int cx = game.players[my_id].x;
     int cy = game.players[my_id].y;
 
-    cam.target = {(float)cx - 350, (float)cy - 250};
+    move_camera(&cam, cx, cy);
 
     handle_packets(&game, &my_id);
 
@@ -441,21 +451,13 @@ int main() {
       DrawTextScale("waiting for server...", 50, 50, 48, GREEN);
       EndDrawing();
       continue;
-    }
+    };
 
     if (!usernamechosen) {
-      if (settings_saved_indicator_timer != 0)
-        settings_saved_indicator_timer--;
-      do_username_prompt(&usernameprompt, &usernamechosen, &game.players, my_id,
-                         &colorindex, options, &g_conf,
-                         &settings_saved_indicator_timer);
-      continue;
-    }
-
-    if (mycolor.r == 0 && mycolor.g == 0 && mycolor.b == 0) {
-      std::cout << colorindex << std::endl;
-      mycolor = options[colorindex];
-      game.players[my_id].color = mycolor;
+      manage_username_prompt(&(game.players), my_id, options, &g_conf);
+      game.players[my_id].username = g_conf.username;
+      game.players[my_id].color = options[g_conf.colorindex];
+      usernamechosen = true;
     }
 
     server_update_counter++;
@@ -482,10 +484,7 @@ int main() {
       server_update_counter = 0;
     }
 
-    move_players(&game.players, my_id);
-
-    for (Bullet &b : bullets)
-      b.move();
+    game.update(my_id, cam);
 
     if (!canshoot)
       bdelay--;
@@ -504,7 +503,7 @@ int main() {
       Vector2 origin = {(float)game.players[my_id].x + 50,
                         (float)game.players[my_id].y + 50};
       Vector2 spawnPos = Vector2Add(origin, spawnOffset);
-      bullets.push_back(Bullet(spawnPos.x, spawnPos.y, dir));
+      game.bullets.push_back(Bullet(spawnPos.x, spawnPos.y, dir, my_id));
 
       send_message(
           std::string("10\n ").append(std::to_string(game.players[my_id].rot)),
@@ -529,13 +528,14 @@ int main() {
 
     draw_players(game.players, &res_man);
 
-    for (Bullet &b : bullets)
+    for (Bullet &b : game.bullets)
       b.show();
 
     EndMode2D();
 
     // Draw HUD after EndMode2D but still in render texture
-    draw_ui(mycolor, game.players, my_id, bdelay, cam, scale);
+    draw_ui(options[g_conf.colorindex], game.players, my_id, bdelay, cam,
+            scale);
 
     EndTextureMode();
 

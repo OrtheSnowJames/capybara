@@ -2,8 +2,48 @@
 #include "bullet.hpp"
 #include "raylib.h"
 #include "utils.hpp"
+#include <algorithm>
 
-struct Game {
+class Game {
+public:
   playermap players;
   std::vector<Bullet> bullets;
+
+  void update_bullets(Camera2D cam, int my_id) {
+    for (Bullet &b : this->bullets) {
+      b.move();
+    }
+    bullets.erase(std::remove_if(bullets.begin(), bullets.end(),
+                                 [cam, my_id](const Bullet &bullet) {
+                                   return bullet.shotby_id != my_id &&
+                                          !isInViewport(bullet.x, bullet.y,
+                                                        bullet.r * 2,
+                                                        bullet.r * 2, cam);
+                                 }),
+                  bullets.end());
+  }
+
+  void update_players(int skip) {
+    for (auto &[k, v] : this->players) {
+      if (k == skip)
+        continue;
+      if (v.x != v.nx) {
+        if (v.x < v.nx)
+          v.x += v.speed;
+        if (v.x > v.nx)
+          v.x -= v.speed;
+      }
+      if (v.y != v.ny) {
+        if (v.y < v.ny)
+          v.y += v.speed;
+        if (v.y > v.ny)
+          v.y -= v.speed;
+      }
+    }
+  }
+
+  void update(int skip, Camera2D cam) {
+    this->update_players(skip);
+    this->update_bullets(cam, skip);
+  }
 };

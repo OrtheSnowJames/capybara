@@ -302,11 +302,13 @@ int main() {
           Vector2 origin = {(float)game.players[from_id].x + 50,
                             (float)game.players[from_id].y + 50};
           Vector2 spawnPos = Vector2Add(origin, spawnOffset);
-          game.bullets.push_back(Bullet(spawnPos.x, spawnPos.y, dir));
+          game.bullets.push_back(
+              Bullet((int)spawnPos.x, (int)spawnPos.y, dir, from_id));
           std::lock_guard<std::mutex> c_lock(clients_mutex);
           std::ostringstream j;
           j << "10\n"
-            << from_id << ' ' << spawnPos.x << ' ' << spawnPos.y << ' ' << rot;
+            << from_id << ' ' << (int)spawnPos.x << ' ' << (int)spawnPos.y
+            << ' ' << rot;
           std::cout << j.str() << '\n';
           broadcast_message(j.str(), clients);
           break;

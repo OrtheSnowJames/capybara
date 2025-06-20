@@ -26,6 +26,7 @@ inline bool isInViewport(int x, int y, int width, int height, Camera2D cam) {
   return CheckCollisionRecs({(float)x, (float)y, (float)width, (float)height},
                             viewport);
 }
+
 inline bool color_equal(Color a, Color b) {
   return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
 }
