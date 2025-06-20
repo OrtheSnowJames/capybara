@@ -387,19 +387,23 @@ bool move_gun(float *rot, int cx, int cy, Camera2D cam, float scale,
 }
 
 void move_camera(Camera2D *cam, int cx, int cy) {
-  cam->target = (Vector2){(float)cx - 350, (float)cy - 250};
-  if (cam->target.x - cam->offset.x / cam->zoom < 0)
-    cam->target.x = 0;
-  if ((cam->target.x - cam->offset.x / cam->zoom) +
-          GetScreenWidth() / cam->zoom >
-      PLAYING_AREA.width)
-    cam->target.x = PLAYING_AREA.width - (GetScreenWidth() / cam->zoom);
-  if (cam->target.y - cam->offset.y / cam->zoom < 0)
-    cam->target.y = 0;
-  if ((cam->target.y - cam->offset.y / cam->zoom) +
-          GetScreenHeight() / cam->zoom >
-      PLAYING_AREA.height)
-    cam->target.y = PLAYING_AREA.height - (GetScreenHeight() / cam->zoom);
+  // Center the camera on the player
+  cam->target = (Vector2){(float)cx + 50, (float)cy + 50};
+  
+  // Constrain camera to playing field boundaries
+  // Use the render texture dimensions (window_size) for boundary calculations
+  // since that's what the game world is rendered to
+  float viewWidth = window_size.x / cam->zoom;
+  float viewHeight = window_size.y / cam->zoom;
+  
+  if (cam->target.x < viewWidth / 2)
+    cam->target.x = viewWidth / 2;
+  if (cam->target.x > PLAYING_AREA.width - viewWidth / 2)
+    cam->target.x = PLAYING_AREA.width - viewWidth / 2;
+  if (cam->target.y < viewHeight / 2)
+    cam->target.y = viewHeight / 2;
+  if (cam->target.y > PLAYING_AREA.height - viewHeight / 2)
+    cam->target.y = PLAYING_AREA.height - viewHeight / 2;
 }
 
 int main() {
@@ -416,9 +420,9 @@ int main() {
   }
 
   std::thread recv_thread(do_recv);
-  InitWindow(800, 600, "Multi Ludens");
-
   SetWindowState(FLAG_WINDOW_RESIZABLE);
+  
+  InitWindow(800, 600, "Multi Ludens");
 
   SetTargetFPS(60);
 
@@ -441,7 +445,7 @@ int main() {
   Camera2D cam;
   cam.zoom = 1.0f;
   cam.rotation = 0.0f;
-  cam.offset = (Vector2){0.0f, 0.0f};
+  cam.offset = (Vector2){window_size.x / 2.0f, window_size.y / 2.0f};
   // create render texture to draw game at normal res
   RenderTexture2D target = LoadRenderTexture(window_size.x, window_size.y);
 
@@ -450,11 +454,6 @@ int main() {
     float widthRatio = (float)GetScreenWidth() / window_size.x;
     float heightRatio = (float)GetScreenHeight() / window_size.y;
     float scale = (widthRatio < heightRatio) ? widthRatio : heightRatio;
-
-    int cx = game.players[my_id].x;
-    int cy = game.players[my_id].y;
-
-    move_camera(&cam, cx, cy);
 
     handle_packets(&game, &my_id);
 
@@ -465,6 +464,12 @@ int main() {
       EndDrawing();
       continue;
     };
+
+    // Put here to make sure id exists
+    int cx = game.players[my_id].x;
+    int cy = game.players[my_id].y;
+
+    move_camera(&cam, cx, cy);
 
     if (!usernamechosen) {
       manage_username_prompt(&(game.players), my_id, options, &g_conf);

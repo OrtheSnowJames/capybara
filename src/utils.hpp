@@ -3,6 +3,8 @@
 
 #include "player.hpp"
 #include "raylib.h"
+#include "constants.hpp"
+#include "drawScale.hpp"
 #include <arpa/inet.h>
 #include <cstdio>
 #include <map>
@@ -20,8 +22,8 @@ typedef std::pair<int, std::shared_ptr<std::thread>> client;
 inline bool isInViewport(int x, int y, int width, int height, Camera2D cam) {
   Rectangle viewport = {cam.target.x - cam.offset.x / cam.zoom,
                         cam.target.y - cam.offset.y / cam.zoom,
-                        GetScreenWidth() / cam.zoom,
-                        GetScreenHeight() / cam.zoom};
+                        window_size.x / cam.zoom,
+                        window_size.y / cam.zoom};
 
   return CheckCollisionRecs({(float)x, (float)y, (float)width, (float)height},
                             viewport);

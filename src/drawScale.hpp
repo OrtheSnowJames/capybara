@@ -1,15 +1,18 @@
+#ifndef DRAW_SCALE_HPP
+#define DRAW_SCALE_HPP
+
 #include "raylib.h"
 
 const Vector2 window_size = {800, 600};
 
-float GetMinScaleRatio() {
+inline float GetMinScaleRatio() {
     float widthScaleRatio = (float)GetScreenWidth() / window_size.x;
     float heightScaleRatio = (float)GetScreenHeight() / window_size.y;
     return (widthScaleRatio < heightScaleRatio) ? widthScaleRatio : heightScaleRatio;
 }
 
 // Bottom-left anchored versions
-void DrawRectangleScale(float x, float y, float width, float height, Color color) {
+inline void DrawRectangleScale(float x, float y, float width, float height, Color color) {
     float scaleRatio = GetMinScaleRatio();
     
     DrawRectangle(
@@ -21,7 +24,7 @@ void DrawRectangleScale(float x, float y, float width, float height, Color color
     );
 }
 
-void DrawSquareScale(float x, float y, float size, Color color) {
+inline void DrawSquareScale(float x, float y, float size, Color color) {
     float scaleRatio = GetMinScaleRatio();
     
     DrawRectangle(
@@ -33,7 +36,7 @@ void DrawSquareScale(float x, float y, float size, Color color) {
     );
 }
 
-void DrawTextScale(const char *text, float x, float y, float size, Color color) {
+inline void DrawTextScale(const char *text, float x, float y, float size, Color color) {
     float scaleRatio = GetMinScaleRatio();
     
     DrawText(
@@ -46,7 +49,7 @@ void DrawTextScale(const char *text, float x, float y, float size, Color color) 
 }
 
 // Centered versions
-void DrawRectangleScaleCentered(float x, float y, float width, float height, Color color) {
+inline void DrawRectangleScaleCentered(float x, float y, float width, float height, Color color) {
     float scaleRatio = GetMinScaleRatio();
     float offsetX = (GetScreenWidth() - (window_size.x * scaleRatio)) / 2;
     float offsetY = (GetScreenHeight() - (window_size.y * scaleRatio)) / 2;
@@ -60,7 +63,7 @@ void DrawRectangleScaleCentered(float x, float y, float width, float height, Col
     );
 }
 
-void DrawSquareScaleCentered(float x, float y, float size, Color color) {
+inline void DrawSquareScaleCentered(float x, float y, float size, Color color) {
     float scaleRatio = GetMinScaleRatio();
     float offsetX = (GetScreenWidth() - (window_size.x * scaleRatio)) / 2;
     float offsetY = (GetScreenHeight() - (window_size.y * scaleRatio)) / 2;
@@ -74,7 +77,7 @@ void DrawSquareScaleCentered(float x, float y, float size, Color color) {
     );
 }
 
-void DrawTextScaleCentered(const char *text, float x, float y, float size, Color color) {
+inline void DrawTextScaleCentered(const char *text, float x, float y, float size, Color color) {
     float scaleRatio = GetMinScaleRatio();
     float offsetX = (GetScreenWidth() - (window_size.x * scaleRatio)) / 2;
     float offsetY = (GetScreenHeight() - (window_size.y * scaleRatio)) / 2;
@@ -88,11 +91,12 @@ void DrawTextScaleCentered(const char *text, float x, float y, float size, Color
     );
 }
 
-int MeasureTextScale(const char *text, float size) {
+inline int MeasureTextScale(const char *text, float size) {
     // Don't apply scaling here since we're measuring for the base 800x600 resolution
     return MeasureText(text, size);
 }
 
 // These are now just empty functions since we're handling scaling in the draw functions
-void BeginUiDrawing() {}
-void EndUiDrawing() {}
+inline void BeginUiDrawing() {}
+inline void EndUiDrawing() {}
+#endif // DRAW_SCALE_HPP
