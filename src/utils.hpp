@@ -83,9 +83,11 @@ inline void send_message(std::string msg, int sock) {
 }
 
 inline void broadcast_message(std::string msg,
-                              std::unordered_map<int, client> clients) {
+                              std::unordered_map<int, client> clients,
+                              int exclude = -1000) {
   for (auto &[_, s] : clients)
-    send_message(msg, s.first);
+    if (_ != exclude)
+      send_message(msg, s.first);
 }
 
 inline void split(std::string str, std::string splitBy,

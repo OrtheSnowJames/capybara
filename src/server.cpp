@@ -310,7 +310,7 @@ int main() {
             << from_id << ' ' << (int)spawnPos.x << ' ' << (int)spawnPos.y
             << ' ' << rot;
           std::cout << j.str() << '\n';
-          broadcast_message(j.str(), clients);
+          broadcast_message(j.str(), clients, from_id);
           break;
         }
         default:

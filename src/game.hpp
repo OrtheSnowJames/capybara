@@ -1,5 +1,6 @@
 #pragma once
 #include "bullet.hpp"
+#include "constants.hpp"
 #include "raylib.h"
 #include "utils.hpp"
 #include <algorithm>
@@ -15,10 +16,10 @@ public:
     }
     bullets.erase(std::remove_if(bullets.begin(), bullets.end(),
                                  [cam, my_id](const Bullet &bullet) {
-                                   return bullet.shotby_id != my_id &&
-                                          !isInViewport(bullet.x, bullet.y,
-                                                        bullet.r * 2,
-                                                        bullet.r * 2, cam);
+                                   return bullet.x < 0 ||
+                                          bullet.x > PLAYING_AREA.width ||
+                                          bullet.y < 0 ||
+                                          bullet.y > PLAYING_AREA.height;
                                  }),
                   bullets.end());
   }

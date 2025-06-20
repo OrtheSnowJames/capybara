@@ -295,8 +295,8 @@ void manage_username_prompt(playermap *players, int my_id, Color options[5],
   }
 }
 
-void draw_ui(Color mycolor, playermap players, int my_id, int shoot_cooldown,
-             Camera2D cam, float scale) {
+void draw_ui(Color mycolor, playermap players, std::vector<Bullet> bullets,
+             int my_id, int shoot_cooldown, Camera2D cam, float scale) {
   BeginUiDrawing();
 
   DrawFPS(0, 0);
@@ -333,6 +333,19 @@ void draw_ui(Color mycolor, playermap players, int my_id, int shoot_cooldown,
     float barY = y + boxHeight - padding - barHeight;
     DrawRectangle(textPadding, barY, shoot_cooldown * 2, barHeight, GREEN);
   }
+
+  // minimap
+  DrawRectangle(window_size.x - 100, 0, 100, 100, GRAY);
+
+  for (auto &[_, p] : players) {
+    DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                  p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
+  }
+
+  for (Bullet b : bullets)
+    DrawCircle(window_size.x - 100 + b.x / (PLAYING_AREA.width / 100),
+               b.y / (PLAYING_AREA.height / 100),
+               b.r / (PLAYING_AREA.width / 100), BLACK);
 
   EndUiDrawing();
 }
@@ -534,8 +547,8 @@ int main() {
     EndMode2D();
 
     // Draw HUD after EndMode2D but still in render texture
-    draw_ui(options[g_conf.colorindex], game.players, my_id, bdelay, cam,
-            scale);
+    draw_ui(options[g_conf.colorindex], game.players, game.bullets, my_id,
+            bdelay, cam, scale);
 
     EndTextureMode();
 
