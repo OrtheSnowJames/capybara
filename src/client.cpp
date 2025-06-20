@@ -147,14 +147,25 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     break;
   case MSG_PLAYER_NAME: {
     split(payload, std::string(" "), msg_split);
-    (*game).players.at(std::stoi(msg_split[0])).username = msg_split[1];
+    if (msg_split.size() >= 2) {
+      // Reconstruct username from all parts after the player ID
+      std::string username;
+      for (size_t j = 1; j < msg_split.size(); ++j) {
+        if (!username.empty())
+          username += " ";
+        username += msg_split[j];
+      }
+      (*game).players.at(std::stoi(msg_split[0])).username = username;
+      std::cout << "Received username for player " << msg_split[0] << ": '" << username << "'" << std::endl;
+    }
   } break;
   case MSG_PLAYER_COLOR: {
     split(payload, std::string(" "), msg_split);
     if ((*game).players.find(std::stoi(msg_split[0])) !=
         (*game).players.end()) {
+      unsigned int color_code = std::stoi(msg_split[1]);
       (*game).players.at(std::stoi(msg_split[0])).color =
-          uint_to_color(std::stoi(msg_split[1]));
+          uint_to_color(color_code);
     }
   } break;
   case MSG_BULLET_SHOT: {

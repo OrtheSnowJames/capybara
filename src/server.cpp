@@ -273,7 +273,6 @@ int main() {
           }
         } break;
         case 6: {
-          // THIS PART IS GOOD
           std::lock_guard<std::mutex> lock(game_mutex);
           unsigned int x = (unsigned int)std::stoi(payload);
           game.players[from_id].color = uint_to_color(x);
