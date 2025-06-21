@@ -33,6 +33,7 @@ std::list<std::string> packets = {};
 
 std::atomic<bool> running = true;
 static std::string network_buffer = "";
+static Color my_true_color = RED;
 
 void do_recv() {
   char buffer[1024];
@@ -170,7 +171,14 @@ void handle_packet(int packet_type, std::string payload, Game *game,
 
     if (game->players.count(id)) {
       game->players.at(id).username = username;
-      game->players.at(id).color = uint_to_color(color_code);
+      Color new_color = uint_to_color(color_code);
+      game->players.at(id).color = new_color;
+
+      // Only update the "true" color if the change is for the local player
+      // and the new color isn't INVISIBLE.
+      if (id == *my_id && !color_equal(new_color, INVISIBLE)) {
+        my_true_color = new_color;
+      }
     }
   } break;
   case MSG_BULLET_SHOT: {
@@ -291,8 +299,10 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
       *usernamechosen = true;
       game_conf->username = *usernameprompt;
       game_conf->colorindex = *mycolor;
+      my_true_color = options[*mycolor];
 
-      std::string payload = *usernameprompt + " " + std::to_string(color_to_uint(options[*mycolor]));
+      std::string payload =
+          *usernameprompt + " " + std::to_string(color_to_uint(options[*mycolor]));
       send_message(std::string("5\n").append(payload), sock);
     }
   }
@@ -324,8 +334,9 @@ void manage_username_prompt(playermap *players, int my_id, Color options[5],
   }
 }
 
-void draw_ui(Color mycolor, playermap players, std::vector<Bullet> bullets,
-             int my_id, int shoot_cooldown, Camera2D cam, float scale) {
+void draw_ui(Color my_ui_color, playermap players,
+             std::vector<Bullet> bullets, int my_id, int shoot_cooldown,
+             Camera2D cam, float scale) {
   BeginUiDrawing();
 
   DrawFPS(0, 0);
@@ -352,7 +363,7 @@ void draw_ui(Color mycolor, playermap players, std::vector<Bullet> bullets,
 
   // player info
   DrawRectangle(padding, y + (boxHeight - squareSize) / 2, squareSize,
-                squareSize, mycolor);
+                squareSize, my_ui_color);
   DrawText(players[my_id].username.c_str(), textPadding,
            y + (boxHeight - textSize) / 2, textSize, WHITE);
 
@@ -366,11 +377,14 @@ void draw_ui(Color mycolor, playermap players, std::vector<Bullet> bullets,
   // minimap
   DrawRectangle(window_size.x - 100, 0, 100, 100, GRAY);
 
-  for (auto &[_, p] : players) {
-    if (color_equal(p.color, INVISIBLE))
-      continue;
-    DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
-                  p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
+  for (auto &[id, p] : players) {
+    if (id == my_id) {
+      DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                    p.y / (PLAYING_AREA.height / 100), 10, 10, my_ui_color);
+    } else if (!color_equal(p.color, INVISIBLE)) {
+      DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                    p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
+    }
   }
 
   for (Bullet b : bullets)
@@ -381,12 +395,17 @@ void draw_ui(Color mycolor, playermap players, std::vector<Bullet> bullets,
   EndUiDrawing();
 }
 
-void draw_players(playermap players, ResourceManager *res_man) {
+void draw_players(playermap players, ResourceManager *res_man, int my_id) {
   for (auto &[id, p] : players) {
-    if (p.username == "unset" || color_equal(p.color, INVISIBLE))
+    if (p.username == "unset" || (color_equal(p.color, INVISIBLE) && id != my_id))
       continue;
     Color clr = p.color;
-    DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
+    if (id == my_id && color_equal(p.color, INVISIBLE)) {
+      // draw with transparency
+      DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
+    } else {
+      DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
+    }
 
     DrawText(p.username.c_str(),
              p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
@@ -575,7 +594,7 @@ int main() {
       }
     }
 
-    draw_players(game.players, &res_man);
+    draw_players(game.players, &res_man, my_id);
 
     for (Bullet &b : game.bullets)
       b.show();
@@ -583,7 +602,7 @@ int main() {
     EndMode2D();
 
     // Draw HUD after EndMode2D but still in render texture
-    draw_ui(options[g_conf.colorindex], game.players, game.bullets, my_id,
+    draw_ui(my_true_color, game.players, game.bullets, my_id,
             bdelay, cam, scale);
 
     EndTextureMode();

@@ -37,6 +37,11 @@ void shutdown_server(int signum) {
 std::mutex game_mutex;
 Game game;
 
+std::mutex assassin_mutex;
+int assassin_id = -1;
+Color original_assassin_color;
+std::chrono::steady_clock::time_point assassin_start_time;
+
 typedef std::list<std::pair<int, std::string>> packetlist;
 
 std::mutex packets_mutex;
@@ -171,8 +176,42 @@ enum EventType {
   Assasin = 1
 };
 
+void make_player_assassin(int target_id) {
+  std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
+  if (assassin_id != -1) {
+    std::cout << "Command failed: An assassin event is already active."
+              << std::endl;
+    return;
+  }
+
+  std::lock_guard<std::mutex> game_lock(game_mutex);
+  if (game.players.find(target_id) == game.players.end()) {
+    std::cout << "Command failed: Player with ID " << target_id
+              << " not found." << std::endl;
+    return;
+  }
+
+  // store assassin state
+  assassin_id = target_id;
+  original_assassin_color = game.players.at(target_id).color;
+  assassin_start_time = std::chrono::steady_clock::now();
+
+  // make player invisible
+  game.players.at(target_id).color = INVISIBLE;
+
+  std::cout << "Player " << target_id << " is now the assassin." << std::endl;
+
+  std::ostringstream response;
+  response << "5\n" // MSG_PLAYER_UPDATE
+           << target_id << " " << game.players.at(target_id).username << " "
+           << color_to_uint(INVISIBLE);
+
+  std::lock_guard<std::mutex> clients_lock(clients_mutex);
+  broadcast_message(response.str(), clients);
+}
+
 void summon_event(int delay) {
-  if (delay <= 60) {
+  if (delay <= 70) {
     return; // too short to summon an event
   }
 
@@ -182,24 +221,20 @@ void summon_event(int delay) {
     case EventType::Darkness:
       break;
     case EventType::Assasin: {
-      if (game.players.empty()) {
-        break;
+      int target_id = -1;
+      {
+        std::lock_guard<std::mutex> game_lock(game_mutex);
+        if (game.players.empty()) {
+          break;
+        }
+        auto it = game.players.begin();
+        std::advance(it, random_int(0, game.players.size() - 1));
+        target_id = it->first;
       }
-      // pick a random player
-      auto it = game.players.begin();
-      std::advance(it, random_int(0, game.players.size() - 1));
-      int target_id = it->first;
 
-      // Make player invisible
-      game.players.at(target_id).color = uint_to_color(5); // 5 is invisible
-
-      // Broadcast the change
-      std::ostringstream response;
-      response << "5\n"
-               << target_id << " " << game.players.at(target_id).username
-               << " " << 5;
-      broadcast_message(response.str(), clients);
-
+      if (target_id != -1) {
+        make_player_assassin(target_id);
+      }
       break;
     }
   };
@@ -224,6 +259,26 @@ void event_worker() {
 // ---------------------------------
 // END EVENTS
 // ---------------------------------
+
+void handle_stdin_commands() {
+  std::string line;
+  while (std::getline(std::cin, line)) {
+    std::istringstream iss(line);
+    std::string command;
+    iss >> command;
+
+    if (command == "assassin") {
+      int target_id;
+      if (!(iss >> target_id)) {
+        std::cout << "Usage: assassin <player_id>" << std::endl;
+        continue;
+      }
+      make_player_assassin(target_id);
+    } else {
+      std::cout << "Unknown command: " << command << std::endl;
+    }
+  }
+}
 
 void accept_clients(int sock) {
   while (true) {
@@ -272,12 +327,55 @@ int main() {
   }
 
   std::thread(accept_clients, sock).detach();
+  std::thread(event_worker).detach();
+  std::thread(handle_stdin_commands).detach();
 
   std::cout << "Running.\n";
 
   std::signal(SIGINT, shutdown_server); // handle SIGINT
   // handle game stuff
   while (1) {
+    // Check for assassin timeout
+    {
+      std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
+      if (assassin_id != -1) {
+        auto now = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                            now - assassin_start_time)
+                            .count();
+
+        if (duration >= 60) {
+          std::cout << "Assassin event ended for player " << assassin_id
+                    << std::endl;
+
+          {
+            std::lock_guard<std::mutex> game_lock(game_mutex);
+            if (game.players.count(assassin_id)) {
+              game.players.at(assassin_id).color = original_assassin_color;
+              unsigned int original_color_id =
+                  color_to_uint(original_assassin_color);
+
+              // Broadcast the change back to normal
+              std::ostringstream response;
+              response << "5\n" // MSG_PLAYER_UPDATE
+                       << assassin_id << " "
+                       << game.players.at(assassin_id).username << " "
+                       << original_color_id;
+              std::lock_guard<std::mutex> clients_lock(clients_mutex);
+              broadcast_message(response.str(), clients);
+            } else {
+              std::cout << "Player " << assassin_id
+                        << " (assassin) already disconnected. Event over."
+                        << std::endl;
+            }
+          }
+
+          // Reset assassin state
+          assassin_id = -1;
+        }
+      }
+    }
+
     {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       std::lock_guard<std::mutex> lo(running_mutex);

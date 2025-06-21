@@ -161,4 +161,9 @@ T random_enum_element(T first, T last) {
   return static_cast<T>(dis(gen));
 }
 
+void DrawTextureAlpha(Texture2D texture, int x, int y, unsigned char alpha) {
+  Color tint = (Color){255, 255, 255, alpha};
+  DrawTexture(texture, x, y, tint);
+}
+
 #endif
