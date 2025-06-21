@@ -367,6 +367,8 @@ void draw_ui(Color mycolor, playermap players, std::vector<Bullet> bullets,
   DrawRectangle(window_size.x - 100, 0, 100, 100, GRAY);
 
   for (auto &[_, p] : players) {
+    if (color_equal(p.color, INVISIBLE))
+      continue;
     DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
                   p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
   }
@@ -381,7 +383,7 @@ void draw_ui(Color mycolor, playermap players, std::vector<Bullet> bullets,
 
 void draw_players(playermap players, ResourceManager *res_man) {
   for (auto &[id, p] : players) {
-    if (p.username == "unset")
+    if (p.username == "unset" || color_equal(p.color, INVISIBLE))
       continue;
     Color clr = p.color;
     DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);

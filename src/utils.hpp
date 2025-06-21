@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <cctype>
 
+const Color INVISIBLE = BLANK;
+
 typedef std::map<int, Player> playermap;
 typedef std::pair<int, std::shared_ptr<std::thread>> client;
 
@@ -48,6 +50,8 @@ inline Color uint_to_color(unsigned int i) {
     return PURPLE;
   case 4:
     return ORANGE;
+  case 5:
+    return INVISIBLE;
   }
   return BLACK;
 }
@@ -63,7 +67,9 @@ inline unsigned int color_to_uint(Color c) {
     return 3;
   else if (color_equal(c, ORANGE))
     return 4;
-  return 5;
+  else if (color_equal(c, INVISIBLE))
+    return 5;
+  return 6;
 }
 
 struct ColorCompare {
@@ -127,6 +133,13 @@ inline void split(std::string str, std::string splitBy,
     tokens.push_back(
         frag.substr(splitAt + splitLen, frag.size() - (splitAt + splitLen)));
   }
+}
+
+inline int random_int(int min, int max) {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<> dis(min, max);
+  return dis(gen);
 }
 
 inline std::string sanitize_username(std::string str) {

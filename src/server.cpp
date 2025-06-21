@@ -74,7 +74,7 @@ void handle_client(int client, int id) {
         }
         // sanitize color
         uint col = color_to_uint(v.color);
-        if (col > 4)
+        if (col > 5)
           col = 1;
         out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << safe_username
             << ' ' << col << ' ' << v.weapon_id;
@@ -181,8 +181,27 @@ void summon_event(int delay) {
   switch (event) {
     case EventType::Darkness:
       break;
-    case EventType::Assasin:
+    case EventType::Assasin: {
+      if (game.players.empty()) {
+        break;
+      }
+      // pick a random player
+      auto it = game.players.begin();
+      std::advance(it, random_int(0, game.players.size() - 1));
+      int target_id = it->first;
+
+      // Make player invisible
+      game.players.at(target_id).color = uint_to_color(5); // 5 is invisible
+
+      // Broadcast the change
+      std::ostringstream response;
+      response << "5\n"
+               << target_id << " " << game.players.at(target_id).username
+               << " " << 5;
+      broadcast_message(response.str(), clients);
+
       break;
+    }
   };
 }
 
