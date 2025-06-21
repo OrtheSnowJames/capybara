@@ -13,7 +13,7 @@ Press enter to start.
 Use WASD to move around.
 
 ### Shooting
-Click in the direction you want to shoot to shoot. This will fire a bullet.
+Click in the direction you want to shoot to fire a bullet. You can use the minimap to see player locations.
 
 ## Setup
 
