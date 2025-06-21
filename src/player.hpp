@@ -13,6 +13,7 @@ public:
   Color color = RED;
   std::string username = std::string("unset");
   float rot = 0;
+  int weapon_id = 0;  // 0 = gun (default), 1 = flashlight
 
   Player(int x, int y) : x(x), y(y), nx(x), ny(y) {}
 

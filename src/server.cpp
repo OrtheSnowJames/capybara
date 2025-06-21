@@ -20,6 +20,19 @@
 #include <unistd.h>
 #include <unordered_map>
 #include <utility>
+#include <random>
+#include <chrono>
+#include <csignal>
+
+static int server_socket_fd = -1;
+
+void shutdown_server(int signum) {
+  std::cout << "\nSignal " << signum << " received. Shutting down." << std::endl;
+  if (server_socket_fd != -1) {
+    close(server_socket_fd);
+  }
+  exit(signum);
+}
 
 std::mutex game_mutex;
 Game game;
@@ -64,9 +77,8 @@ void handle_client(int client, int id) {
         if (col > 4)
           col = 1;
         out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << safe_username
-            << ' ' << col;
+            << ' ' << col << ' ' << v.weapon_id;
       }
-      std::cout << out.str() << std::endl;
     }
 
     // unlock mutex
@@ -86,10 +98,21 @@ void handle_client(int client, int id) {
 
   std::ostringstream out;
 
+  // sanitize username for consistency
+  std::string safe_username = game.players.at(id).username;
+  if (safe_username.empty())
+    safe_username = "unset";
+  // remove bad characters
+  for (char &c : safe_username) {
+    if (c == ';' || c == ':' || c == ' ')
+      c = '_';
+  }
+
   out << "3\n"
       << id << " " << game.players.at(id).x << " " << game.players.at(id).y
-      << " " << game.players.at(id).username << " "
-      << color_to_uint(game.players.at(id).color);
+      << " " << safe_username << " "
+      << color_to_uint(game.players.at(id).color) << " "
+      << game.players.at(id).weapon_id;
 
   for (auto &pair : clients) {
     if (pair.first != id) {
@@ -137,6 +160,52 @@ void handle_client(int client, int id) {
   std::cout << "Client " << id << " disconnected.\n";
 }
 
+
+
+// ---------------------------------
+//  EVENTS
+// ---------------------------------
+
+enum EventType {
+  Darkness = 0,
+  Assasin = 1
+};
+
+void summon_event(int delay) {
+  if (delay <= 60) {
+    return; // too short to summon an event
+  }
+
+  EventType event = random_enum_element(EventType::Darkness, EventType::Assasin);
+
+  switch (event) {
+    case EventType::Darkness:
+      break;
+    case EventType::Assasin:
+      break;
+  };
+}
+
+void event_worker() {
+    std::random_device rd;
+    std::mt19937 rng(rd());
+    std::uniform_int_distribution<int> dist(0, 5 * 60 * 1000); // 0 to 5 min in ms
+
+    while (true) {
+        int delay = dist(rng); // pick when in the next 5 minutes to run
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+        summon_event(delay); // run at some point within the 5 min window
+
+        int remaining = (5 * 60 * 1000) - delay;
+        std::this_thread::sleep_for(std::chrono::milliseconds(remaining));
+    }
+}
+
+// ---------------------------------
+// END EVENTS
+// ---------------------------------
+
 void accept_clients(int sock) {
   while (true) {
     int client = accept(sock, nullptr, nullptr);
@@ -166,6 +235,7 @@ int main() {
     perror("Failed to create socket");
     return -1;
   }
+  server_socket_fd = sock;
 
   sockaddr_in sock_addr;
   sock_addr.sin_family = AF_INET;
@@ -186,6 +256,7 @@ int main() {
 
   std::cout << "Running.\n";
 
+  std::signal(SIGINT, shutdown_server); // handle SIGINT
   // handle game stuff
   while (1) {
     {
@@ -258,19 +329,31 @@ int main() {
             }
           }
           break;
-        case 5: {
-          std::lock_guard<std::mutex> lock(game_mutex);
-          game.players[from_id].username = payload;
-          std::lock_guard<std::mutex> lokc(clients_mutex);
-          for (auto &[k, v] : clients) {
-            if (k == from_id)
-              continue;
-            send_message(std::string("5\n")
-                             .append(std::to_string(from_id))
-                             .append(" ")
-                             .append(payload),
-                         v.first);
+        case 5: { // MSG_PLAYER_UPDATE
+          std::istringstream iss(payload);
+          std::string username;
+          unsigned int color_code;
+          iss >> username >> color_code;
+
+          if (iss.fail()) {
+            std::cerr << "Invalid MSG_PLAYER_UPDATE from " << from_id << ": "
+                      << payload << std::endl;
+            break;
           }
+
+          std::string sanitized_user = sanitize_username(username);
+
+          {
+            std::lock_guard<std::mutex> lock(game_mutex);
+            game.players[from_id].username = sanitized_user;
+            game.players[from_id].color = uint_to_color(color_code);
+          }
+
+          std::ostringstream response;
+          response << "5\n"
+                   << from_id << " " << sanitized_user << " " << color_code;
+          broadcast_message(response.str(), clients, from_id);
+
         } break;
         case 6: {
           std::lock_guard<std::mutex> lock(game_mutex);

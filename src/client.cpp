@@ -32,6 +32,7 @@ std::mutex packets_mutex;
 std::list<std::string> packets = {};
 
 std::atomic<bool> running = true;
+static std::string network_buffer = "";
 
 void do_recv() {
   char buffer[1024];
@@ -49,10 +50,18 @@ void do_recv() {
       break;
     }
 
-    std::lock_guard<std::mutex> lock(packets_mutex);
-    std::string packet(buffer, bytes);
+    network_buffer.append(buffer, bytes);
 
-    packets.push_back(packet);
+    size_t separator_pos;
+    while ((separator_pos = network_buffer.find(';')) != std::string::npos) {
+      std::string packet = network_buffer.substr(0, separator_pos);
+      network_buffer.erase(0, separator_pos + 1);
+
+      if (!packet.empty()) {
+        std::lock_guard<std::mutex> lock(packets_mutex);
+        packets.push_back(packet);
+      }
+    }
   }
 }
 
@@ -63,6 +72,7 @@ void handle_packet(int packet_type, std::string payload, Game *game,
 
   switch (packet_type) {
   case MSG_GAME_STATE:
+    std::cout << "Received game state: " << payload << std::endl;
     // remove trailing semicolon if present
     if (!payload.empty() && payload.back() == ';') {
       payload.pop_back();
@@ -76,7 +86,7 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       std::vector<std::string> player_parts;
       split(i, std::string(" "), player_parts);
 
-      if (player_parts.size() < 5) {
+      if (player_parts.size() != 6) {
         std::cerr << "Invalid player data: " << i << std::endl;
         continue;
       }
@@ -85,20 +95,14 @@ void handle_packet(int packet_type, std::string payload, Game *game,
         int id = std::stoi(player_parts[0]);
         int x = std::stoi(player_parts[1]);
         int y = std::stoi(player_parts[2]);
-        // join all fields between index 3 and last-1 as the username
-        std::string username;
-        for (size_t j = 3; j + 1 < player_parts.size(); ++j) {
-          if (!username.empty())
-            username += " ";
-          username += player_parts[j];
-        }
-        // the color should be the last element
-        unsigned int color_code =
-            (unsigned int)std::stoi(player_parts[player_parts.size() - 1]);
+        std::string username = player_parts[3];
+        unsigned int color_code = (unsigned int)std::stoi(player_parts[4]);
+        int weapon_id = std::stoi(player_parts[5]);
 
         (*game).players[id] = Player(x, y);
         (*game).players[id].username = username;
         (*game).players[id].color = uint_to_color(color_code);
+        (*game).players[id].weapon_id = weapon_id;
 
         std::cout << "Player " << id << " color code: " << color_code
                   << std::endl;
@@ -128,44 +132,45 @@ void handle_packet(int packet_type, std::string payload, Game *game,
 
   } break;
   case MSG_PLAYER_NEW:
+    std::cout << "Received player new: " << payload << std::endl;
     split(payload, " ", msg_split);
+    if (msg_split.size() != 6) {
+      std::cerr << "Invalid MSG_PLAYER_NEW packet: " << payload << std::endl;
+      break;
+    }
     {
       int id = std::stoi(msg_split.at(0));
       int x = std::stoi(msg_split.at(1));
       int y = std::stoi(msg_split.at(2));
       std::string username = msg_split.at(3);
+      unsigned int color_code = (unsigned int)std::stoi(msg_split.at(4));
+      int weapon_id = std::stoi(msg_split.at(5));
 
       (*game).players[id] = Player(x, y);
       (*game).players[id].username = username;
-      (*game).players[id].color = uint_to_color(std::stoi(msg_split.at(4)));
+      (*game).players[id].color = uint_to_color(color_code);
+      (*game).players[id].weapon_id = weapon_id;
     }
-
     break;
   case MSG_PLAYER_LEFT:
     if ((*game).players.find(std::stoi(payload)) != (*game).players.end())
       (*game).players.erase(std::stoi(payload));
     break;
-  case MSG_PLAYER_NAME: {
-    split(payload, std::string(" "), msg_split);
-    if (msg_split.size() >= 2) {
-      // Reconstruct username from all parts after the player ID
-      std::string username;
-      for (size_t j = 1; j < msg_split.size(); ++j) {
-        if (!username.empty())
-          username += " ";
-        username += msg_split[j];
-      }
-      (*game).players.at(std::stoi(msg_split[0])).username = username;
-      std::cout << "Received username for player " << msg_split[0] << ": '" << username << "'" << std::endl;
+  case MSG_PLAYER_UPDATE: {
+    std::istringstream iss(payload);
+    int id;
+    std::string username;
+    unsigned int color_code;
+    iss >> id >> username >> color_code;
+
+    if (iss.fail()) {
+      std::cerr << "Invalid MSG_PLAYER_UPDATE packet: " << payload << std::endl;
+      break;
     }
-  } break;
-  case MSG_PLAYER_COLOR: {
-    split(payload, std::string(" "), msg_split);
-    if ((*game).players.find(std::stoi(msg_split[0])) !=
-        (*game).players.end()) {
-      unsigned int color_code = std::stoi(msg_split[1]);
-      (*game).players.at(std::stoi(msg_split[0])).color =
-          uint_to_color(color_code);
+
+    if (game->players.count(id)) {
+      game->players.at(id).username = username;
+      game->players.at(id).color = uint_to_color(color_code);
     }
   } break;
   case MSG_BULLET_SHOT: {
@@ -200,15 +205,27 @@ void handle_packets(Game *game, int *my_id) {
   std::lock_guard<std::mutex> lock(packets_mutex);
   while (!packets.empty()) {
     std::string packet = packets.front();
+    packets.pop_front();
 
-    int packet_type = std::stoi(packet.substr(0, packet.find('\n')));
-    std::string payload =
-        packet.substr(packet.find('\n') + 1, packet.find_first_of(';') - 2);
+    size_t newline_pos = packet.find('\n');
+    if (newline_pos == std::string::npos) {
+      std::cerr << "Malformed packet (no newline): " << packet << std::endl;
+      continue;
+    }
+
+    int packet_type = std::stoi(packet.substr(0, newline_pos));
+    std::string payload = packet.substr(newline_pos + 1);
 
     handle_packet(packet_type, payload, game, my_id);
-
-    packets.pop_front();
   }
+}
+
+bool acceptable_username(std::string username) {
+  return username.length() > 0 && username.length() <= 10 &&
+         std::all_of(username.begin(), username.end(), [](char c) {
+           return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9');
+         }); // only allow alphanumeric characters
 }
 
 void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
@@ -263,20 +280,21 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
 
   EndUiDrawing();
 
-  if (k != 0 && k != '\n' && k != ':' && k != ' ' && k != ';' &&
-      (*usernameprompt).length() < 10) {
+  if (acceptable_username(std::string(1, k)) && (*usernameprompt).length() < 10) {
     (*usernameprompt).push_back(k);
   }
   if (IsKeyPressed(KEY_BACKSPACE) && !(*usernameprompt).empty())
     (*usernameprompt).pop_back();
 
   if (IsKeyPressed(KEY_ENTER) && !(*usernameprompt).empty() && my_id != -1) {
-    *usernamechosen = true;
-    game_conf->username = *usernameprompt;
-    game_conf->colorindex = *mycolor;
-    send_message(std::string("5\n").append(*usernameprompt), sock);
-    send_message("6\n" + std::to_string(color_to_uint(options[*mycolor])),
-                 sock);
+    if (acceptable_username(*usernameprompt)) {
+      *usernamechosen = true;
+      game_conf->username = *usernameprompt;
+      game_conf->colorindex = *mycolor;
+
+      std::string payload = *usernameprompt + " " + std::to_string(color_to_uint(options[*mycolor]));
+      send_message(std::string("5\n").append(payload), sock);
+    }
   }
 
   if (IsKeyPressed(KEY_LEFT))

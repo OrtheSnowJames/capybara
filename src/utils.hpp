@@ -15,6 +15,9 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <random>
+#include <algorithm>
+#include <cctype>
 
 typedef std::map<int, Player> playermap;
 typedef std::pair<int, std::shared_ptr<std::thread>> client;
@@ -124,6 +127,25 @@ inline void split(std::string str, std::string splitBy,
     tokens.push_back(
         frag.substr(splitAt + splitLen, frag.size() - (splitAt + splitLen)));
   }
+}
+
+inline std::string sanitize_username(std::string str) {
+  // Remove non-alphabetic characters
+  str.erase(std::remove_if(str.begin(), str.end(),
+                           [](unsigned char c) { return !std::isalpha(c); }),
+            str.end());
+  // Convert to lowercase
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  return str;
+}
+
+template <typename T>
+T random_enum_element(T first, T last) {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<> dis(static_cast<int>(first), static_cast<int>(last));
+  return static_cast<T>(dis(gen));
 }
 
 #endif
