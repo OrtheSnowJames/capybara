@@ -127,9 +127,12 @@ void handle_client(int client, int id) {
       << color_to_uint(game.players.at(id).color) << " "
       << game.players.at(id).weapon_id;
 
-  for (auto &pair : clients) {
-    if (pair.first != id) {
-      send_message(out.str(), pair.second.first);
+  {
+    std::lock_guard<std::mutex> clients_lock(clients_mutex);
+    for (auto &pair : clients) {
+      if (pair.first != id) {
+        send_message(out.str(), pair.second.first);
+      }
     }
   }
 
@@ -378,9 +381,12 @@ void accept_clients(int sock) {
     int id = 0;
     while (1) {
       int id_init = id;
-      for (auto &[k, v] : game.players)
-        if (id == k)
-          id++;
+      {
+        std::lock_guard<std::mutex> game_lock(game_mutex);
+        for (auto &[k, v] : game.players)
+          if (id == k)
+            id++;
+      }
 
       if (id_init == id)
         break;
@@ -483,14 +489,17 @@ int main() {
 
     {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      std::lock_guard<std::mutex> lo(running_mutex);
-
+      
       std::list<int> to_remove;
-      for (auto &[id, v] : is_running) {
-        if (!v) {
-          to_remove.push_back(id);
+      {
+        std::lock_guard<std::mutex> lo(running_mutex);
+        for (auto &[id, v] : is_running) {
+          if (!v) {
+            to_remove.push_back(id);
+          }
         }
       }
+      
       std::lock_guard<std::mutex> a(clients_mutex);
       for (int i : to_remove) {
         if (clients[i].second.get()->joinable())
@@ -499,7 +508,12 @@ int main() {
         shutdown(clients[i].first, SHUT_RDWR);
 
         close(clients[i].first);
-        is_running.erase(i);
+        
+        {
+          std::lock_guard<std::mutex> running_lock(running_mutex);
+          is_running.erase(i);
+        }
+        
         clients.erase(i);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
