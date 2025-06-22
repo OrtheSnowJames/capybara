@@ -176,6 +176,14 @@ void handle_client(int client, int id) {
   std::cout << "Client " << id << " disconnected.\n";
 }
 
+float normalize_rotation(float rot) {
+    rot = fmod(rot, 360.0f); 
+
+    if (rot < 0)
+        rot += 360.0f;
+
+    return rot;
+}
 
 
 // ---------------------------------
@@ -185,7 +193,9 @@ void handle_client(int client, int id) {
 // Check if assassin's knife is touching their target
 bool check_assassin_collision(int assassin_id, int target_id, int assassin_x, int assassin_y, float assassin_rot) {
   if (assassin_id == -1 || target_id == -1) return false;
-  
+
+  assassin_rot = normalize_rotation(assassin_rot + 180.0f);
+
   // check if both players exist
   if (game.players.find(assassin_id) == game.players.end() || 
       game.players.find(target_id) == game.players.end()) {
@@ -194,13 +204,15 @@ bool check_assassin_collision(int assassin_id, int target_id, int assassin_x, in
   
   Player& target = game.players[target_id];
   
-  // calculate knife position
-  float knife_length = 80.0f;
+  // calculate knife position using same approach as client
+  float knife_offset = 80.0f;
   float angle_rad = assassin_rot * DEG2RAD;
   
-  float knife_x = assassin_x + 50 + cosf(angle_rad) * knife_length;
-  float knife_y = assassin_y + 50 + sinf(angle_rad) * knife_length;
+  // knife position extending from assassin center toward cursor direction
+  float knife_x = assassin_x + 50 + cosf(angle_rad) * knife_offset;
+  float knife_y = assassin_y + 50 + sinf(angle_rad) * knife_offset;
   
+  // target center position
   float target_center_x = target.x + 50;
   float target_center_y = target.y + 50;
   float hitbox_radius = 50.0f; 
@@ -413,6 +425,16 @@ int main() {
   sock_addr.sin_family = AF_INET;
   sock_addr.sin_port = htons(50000);
   sock_addr.sin_addr.s_addr = INADDR_ANY;
+
+
+  int yes = 1;
+  setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+  try {
+    setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(yes)); // might not work on macos
+  } catch (const std::exception& e) {
+    std::cerr << "Error setting SO_REUSEPORT: " << e.what() << std::endl;
+  }
+
 
   if (bind(sock, (struct sockaddr *)&sock_addr, sizeof(sock_addr)) < 0) {
     perror("Failed to bind socket");

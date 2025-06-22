@@ -78,7 +78,7 @@ inline unsigned int color_to_uint(Color c) {
   else if (color_equal(c, ORANGE))
     return 4;
   else if (color_equal(c, INVISIBLE))
-    return 5;
+  return 5;
   return 6;
 }
 

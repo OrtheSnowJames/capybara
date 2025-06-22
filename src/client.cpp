@@ -139,6 +139,10 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       break;
 
     if ((*game).players.find(id) != (*game).players.end()) {
+      if (color_equal((*game).players.at(id).color, INVISIBLE) && id != *my_id) {
+        // std::cout << "Client " << *my_id << ": Assassin " << id << " moved to (" << x << ", " << y << ") with rotation " << rot << std::endl;
+      }
+      
       (*game).players.at(id).nx = x;
       (*game).players.at(id).ny = y;
       (*game).players.at(id).rot = rot;
@@ -464,57 +468,59 @@ void draw_ui(Color my_ui_color, playermap players,
 
 void draw_players(playermap players, ResourceManager *res_man, int my_id) {
   for (auto &[id, p] : players) {
-    if (p.username == "unset" || (color_equal(p.color, INVISIBLE) && id != my_id))
+    // Only skip unset players and invisible players that aren't the local player and aren't visible due to range
+    if (p.username == "unset")
       continue;
-    Color clr = p.color;
-    if (id == my_id && is_assassin) {
-      // Always use true color for local player when assassin (with transparency)
-      DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
-    } else if (id == my_id && color_equal(p.color, INVISIBLE)) {
-      // draw with transparency using the original color
-      DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
-    } else {
-      DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
-    }
+      
+    if (!color_equal(p.color, INVISIBLE) || id == my_id) {
+      Color clr = p.color;
+      if (id == my_id && is_assassin) {
+        // Always use true color for local player when assassin (with transparency)
+        DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
+      } else if (id == my_id && color_equal(p.color, INVISIBLE)) {
+        // draw with transparency using the original color
+        DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
+      } else {
+        DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
+      }
 
-    DrawText(p.username.c_str(),
-             p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
-             BLACK);
+      DrawText(p.username.c_str(),
+               p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
+               BLACK);
+    }
 
     // Draw weapon - knife for assassin, gun for others
     if (id == my_id && is_assassin) {
-      // Draw knife texture - positioned further from player center
-      float knife_distance = 80.0f; // Distance from player center
-      float angle_rad = p.rot * DEG2RAD;
-      float knife_x = p.x + 50 + cosf(angle_rad) * knife_distance;
-      float knife_y = p.y + 50 + sinf(angle_rad) * knife_distance;
+      Vector2 player_center = {(float)p.x + 50, (float)p.y + 50};
+      float knife_offset = 80.0f; // distance from player center
       
       DrawTexturePro(res_man->getTex("assets/assassin_knife.png"), 
                      {(float)0, (float)0, 16, 16},
-                     {knife_x - 40, knife_y - 40, 80, 80}, 
-                     {(float)40, (float)40}, 
+                     {player_center.x, player_center.y, 80, 80}, 
+                     {(float)40 + knife_offset, (float)40}, 
                      p.rot, WHITE);
     } else if (color_equal(p.color, INVISIBLE) && id != my_id) {
       if (players.count(my_id)) {
         float distance = sqrtf(powf(p.x - players[my_id].x, 2) + powf(p.y - players[my_id].y, 2));
-        float close_distance = 150.0f; 
+        float close_distance = 300.0f; 
         
         if (distance <= close_distance) {
-          float knife_distance = 80.0f;
-          float angle_rad = p.rot * DEG2RAD;
-          float knife_x = p.x + 50 + cosf(angle_rad) * knife_distance;
-          float knife_y = p.y + 50 + sinf(angle_rad) * knife_distance;
+          Vector2 player_center = {(float)p.x + 50, (float)p.y + 50};
+          float knife_offset = 80.0f;
           
-          Color knife_tint = {255, 255, 255, 64};
+          // Calculate alpha based on distance - more transparent when further away
+          float alpha_scale = 1.0f - (distance / close_distance);
+          unsigned char alpha = (unsigned char)(alpha_scale * 192);
+          Color knife_tint = {255, 255, 255, alpha};
+          
           DrawTexturePro(res_man->getTex("assets/assassin_knife.png"), 
                          {(float)0, (float)0, 16, 16}, 
-                         {knife_x - 40, knife_y - 40, 80, 80}, 
-                         {(float)40, (float)40}, 
+                         {player_center.x, player_center.y, 80, 80}, 
+                         {(float)40 + knife_offset, (float)40}, 
                          p.rot, knife_tint);
           // play sound when close
           if (!assassin_sound_loaded) {
             assassin_sound = LoadSound("assets/assassin_close.wav");
-            std::cout << "Loaded assassin sound" << std::endl;
             assassin_sound_loaded = true;
           }
           
