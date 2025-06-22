@@ -35,10 +35,15 @@ std::atomic<bool> running = true;
 std::string network_buffer = "";
 Color my_true_color = RED;
 
-// Assassin event tracking
+// assassin event tracking
 int my_target_id = -1;
 bool is_assassin = false;
 std::string target_username = "";
+
+// assassin proximity audio
+static Sound assassin_sound;
+static bool assassin_sound_loaded = false;
+static bool assassin_nearby = false;
 
 void do_recv() {
   char buffer[1024];
@@ -84,7 +89,6 @@ void handle_packet(int packet_type, std::string payload, Game *game,
   switch (packet_type) {
   case MSG_GAME_STATE:
     std::cout << "Received game state: " << payload << std::endl;
-    // remove trailing semicolon if present
     if (!payload.empty() && payload.back() == ';') {
       payload.pop_back();
     }
@@ -93,7 +97,6 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       if (i == std::string(""))
         continue;
 
-      // split each player entry by spaces
       std::vector<std::string> player_parts;
       split(i, std::string(" "), player_parts);
 
@@ -187,15 +190,14 @@ void handle_packet(int packet_type, std::string payload, Game *game,
 
       std::cout << "Player " << id << " color changed from " << color_to_string(old_color) << " to " << color_to_string(new_color) << std::endl;
 
-      // Only update the "true" color if the change is for the local player
-      // and the new color isn't INVISIBLE.
+      // only update true color for local player when not invisible
       if (id == *my_id && !color_equal(new_color, INVISIBLE)) {
         Color old_true_color = my_true_color;
         my_true_color = new_color;
         
         std::cout << "Client: Local player true color changed from " << color_to_string(old_true_color) << " to " << color_to_string(my_true_color) << std::endl;
         
-        // Reset assassin state when player becomes visible again
+        // reset assassin state when visible again
         if (is_assassin) {
           is_assassin = false;
           my_target_id = -1;
@@ -211,9 +213,6 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     float rot;
 
     j >> from_id >> x >> y >> rot;
-
-    // if (from_id == *my_id)
-    //   break;
 
     float angleRad = (-rot + 5) * DEG2RAD;
     float bspeed = 10;
@@ -403,10 +402,10 @@ void draw_ui(Color my_ui_color, playermap players,
 
   if (is_assassin && my_target_id != -1) {
     // draw assassin status box at top center
-    DrawRectangleScaleCentered(300, 10, 200, 60, DARKGRAY);
-    DrawTextScaleCentered("ASSASSIN MODE", 300, 20, 16, RED);
-    DrawTextScaleCentered("Target:", 300, 35, 12, WHITE);
-    DrawTextScaleCentered(target_username.c_str(), 300, 50, 12, YELLOW);
+    DrawRectangle(300, 10, 200, 60, DARKGRAY);
+    DrawText("ASSASSIN MODE", 320, 20, 16, RED);
+    DrawText("Target:", 330, 35, 12, WHITE);
+    DrawText(target_username.c_str(), 330, 50, 12, YELLOW);
   }
 
   // Base dimensions for UI elements
@@ -484,19 +483,58 @@ void draw_players(playermap players, ResourceManager *res_man, int my_id) {
 
     // Draw weapon - knife for assassin, gun for others
     if (id == my_id && is_assassin) {
-      // Draw knife texture - positioned at distance from player center
-      float knife_distance = 60.0f;
-      float angle_rad = p.rot * DEG2RAD; 
-      float player_center_x = p.x + 50; 
-      float player_center_y = p.y + 50; 
-      float knife_x = player_center_x + cosf(angle_rad) * knife_distance;
-      float knife_y = player_center_y + sinf(angle_rad) * knife_distance;
+      // Draw knife texture - positioned further from player center
+      float knife_distance = 80.0f; // Distance from player center
+      float angle_rad = p.rot * DEG2RAD;
+      float knife_x = p.x + 50 + cosf(angle_rad) * knife_distance;
+      float knife_y = p.y + 50 + sinf(angle_rad) * knife_distance;
       
       DrawTexturePro(res_man->getTex("assets/assassin_knife.png"), 
-                     {(float)0, (float)0, 16, 16}, // source rectangle
-                     {knife_x - 40, knife_y - 40, 80, 80}, // destination rectangle (centered on knife position)
-                     {(float)40, (float)40}, // origin for rotation
+                     {(float)0, (float)0, 16, 16},
+                     {knife_x - 40, knife_y - 40, 80, 80}, 
+                     {(float)40, (float)40}, 
                      p.rot, WHITE);
+    } else if (color_equal(p.color, INVISIBLE) && id != my_id) {
+      if (players.count(my_id)) {
+        float distance = sqrtf(powf(p.x - players[my_id].x, 2) + powf(p.y - players[my_id].y, 2));
+        float close_distance = 150.0f; 
+        
+        if (distance <= close_distance) {
+          float knife_distance = 80.0f;
+          float angle_rad = p.rot * DEG2RAD;
+          float knife_x = p.x + 50 + cosf(angle_rad) * knife_distance;
+          float knife_y = p.y + 50 + sinf(angle_rad) * knife_distance;
+          
+          Color knife_tint = {255, 255, 255, 64};
+          DrawTexturePro(res_man->getTex("assets/assassin_knife.png"), 
+                         {(float)0, (float)0, 16, 16}, 
+                         {knife_x - 40, knife_y - 40, 80, 80}, 
+                         {(float)40, (float)40}, 
+                         p.rot, knife_tint);
+          // play sound when close
+          if (!assassin_sound_loaded) {
+            assassin_sound = LoadSound("assets/assassin_close.wav");
+            std::cout << "Loaded assassin sound" << std::endl;
+            assassin_sound_loaded = true;
+          }
+          
+          float volume = 1.0f - (distance / close_distance);
+          volume = volume * 0.5f;
+          SetSoundVolume(assassin_sound, volume);
+          
+          // start or continue looping
+          if (!IsSoundPlaying(assassin_sound)) {
+            PlaySound(assassin_sound);
+          }
+          assassin_nearby = true;
+        } else {
+          // assassin moved away, stop the sound
+          if (assassin_nearby && IsSoundPlaying(assassin_sound)) {
+            StopSound(assassin_sound);
+          }
+          assassin_nearby = false;
+        }
+      }
     } else {
       // Draw gun (normal rectangle)
       DrawRectanglePro({(float)p.x + 50, (float)p.y + 50, 50, 20},
@@ -526,12 +564,10 @@ bool move_wpn(float *rot, int cx, int cy, Camera2D cam, float scale,
 }
 
 void move_camera(Camera2D *cam, int cx, int cy) {
-  // Center the camera on the player
+  // center the camera on the player
   cam->target = (Vector2){(float)cx + 50, (float)cy + 50};
   
-  // Constrain camera to playing field boundaries
-  // Use the render texture dimensions (window_size) for boundary calculations
-  // since that's what the game world is rendered to
+  // constrain camera to playing field boundaries
   float viewWidth = window_size.x / cam->zoom;
   float viewHeight = window_size.y / cam->zoom;
   
@@ -665,14 +701,6 @@ int main() {
       send_message(
           std::string("10\n ").append(std::to_string(game.players[my_id].rot)),
           sock);
-    }
-
-    // if assassin and knife touching player, kill them (not implemented yet)
-    if (is_assassin) {
-      if (CheckCollisionCircleRec(Vector2{(float)game.players[my_id].x + 50, (float)game.players[my_id].y + 50}, 50,
-                                  Rectangle{(float)game.players[my_id].x, (float)game.players[my_id].y, 100, 100})) {
-        game.players[my_id].color = RED;
-      }
     }
 
     // draw to render texture

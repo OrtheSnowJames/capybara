@@ -183,30 +183,26 @@ void handle_client(int client, int id) {
 bool check_assassin_collision(int assassin_id, int target_id, int assassin_x, int assassin_y, float assassin_rot) {
   if (assassin_id == -1 || target_id == -1) return false;
   
-  // NOTE: Caller must hold game_mutex lock
-  
-  // Check if both players exist
+  // check if both players exist
   if (game.players.find(assassin_id) == game.players.end() || 
       game.players.find(target_id) == game.players.end()) {
     return false;
   }
   
-  Player& assassin = game.players[assassin_id];
   Player& target = game.players[target_id];
   
-  // Calculate knife position (extending from assassin in the direction they're facing)
-  float knife_length = 80.0f; // Length of the knife
+  // calculate knife position
+  float knife_length = 80.0f;
   float angle_rad = assassin_rot * DEG2RAD;
   
-  // Knife tip position
-  float knife_tip_x = assassin_x + 50 + cosf(angle_rad) * knife_length;
-  float knife_tip_y = assassin_y + 50 + sinf(angle_rad) * knife_length;
+  float knife_x = assassin_x + 50 + cosf(angle_rad) * knife_length;
+  float knife_y = assassin_y + 50 + sinf(angle_rad) * knife_length;
   
   float target_center_x = target.x + 50;
   float target_center_y = target.y + 50;
-  float hitbox_radius = 25.0f; // Half of 50x50 player size
+  float hitbox_radius = 50.0f; 
   
-  float distance = sqrtf(powf(knife_tip_x - target_center_x, 2) + powf(knife_tip_y - target_center_y, 2));
+  float distance = sqrtf(powf(knife_x - target_center_x, 2) + powf(knife_y - target_center_y, 2));
   
   return distance <= hitbox_radius;
 }
