@@ -38,6 +38,16 @@ inline bool color_equal(Color a, Color b) {
   return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
 }
 
+inline std::string color_to_string(Color c) {
+  if (color_equal(c, RED)) return "RED";
+  else if (color_equal(c, GREEN)) return "GREEN";
+  else if (color_equal(c, YELLOW)) return "YELLOW";
+  else if (color_equal(c, PURPLE)) return "PURPLE";
+  else if (color_equal(c, ORANGE)) return "ORANGE";
+  else if (color_equal(c, INVISIBLE)) return "INVISIBLE";
+  else return "UNKNOWN";
+}
+
 inline Color uint_to_color(unsigned int i) {
   switch (i) {
   case 0:

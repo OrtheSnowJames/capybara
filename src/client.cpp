@@ -32,8 +32,13 @@ std::mutex packets_mutex;
 std::list<std::string> packets = {};
 
 std::atomic<bool> running = true;
-static std::string network_buffer = "";
-static Color my_true_color = RED;
+std::string network_buffer = "";
+Color my_true_color = RED;
+
+// Assassin event tracking
+int my_target_id = -1;
+bool is_assassin = false;
+std::string target_username = "";
 
 void do_recv() {
   char buffer[1024];
@@ -65,6 +70,11 @@ void do_recv() {
     }
   }
 }
+
+enum EventType {
+  Darkness = 0,
+  Assasin = 1
+};
 
 void handle_packet(int packet_type, std::string payload, Game *game,
                    int *my_id) {
@@ -170,14 +180,28 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     }
 
     if (game->players.count(id)) {
+      Color old_color = game->players.at(id).color;
       game->players.at(id).username = username;
       Color new_color = uint_to_color(color_code);
       game->players.at(id).color = new_color;
 
+      std::cout << "Player " << id << " color changed from " << color_to_string(old_color) << " to " << color_to_string(new_color) << std::endl;
+
       // Only update the "true" color if the change is for the local player
       // and the new color isn't INVISIBLE.
       if (id == *my_id && !color_equal(new_color, INVISIBLE)) {
+        Color old_true_color = my_true_color;
         my_true_color = new_color;
+        
+        std::cout << "Client: Local player true color changed from " << color_to_string(old_true_color) << " to " << color_to_string(my_true_color) << std::endl;
+        
+        // Reset assassin state when player becomes visible again
+        if (is_assassin) {
+          is_assassin = false;
+          my_target_id = -1;
+          target_username = "";
+          std::cout << "Assassin event ended - you are visible again." << std::endl;
+        }
       }
     }
   } break;
@@ -204,6 +228,37 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     std::cout << "added bullet at " << x << ' ' << y << " with dir " << dir.x
               << ' ' << dir.y << std::endl;
 
+    break;
+  }
+  case MSG_ASSASSIN_CHANGE: {
+    std::cout << "Received assassin change packet: " << payload << std::endl;
+    std::istringstream assassin_stream(payload);
+    int assassin_id, target_id;
+    assassin_stream >> assassin_id >> target_id;
+    
+    if (assassin_stream.fail()) {
+      std::cerr << "Invalid MSG_ASSASSIN_CHANGE packet: " << payload << std::endl;
+      break;
+    }
+    
+    std::cout << "Assassin event: Player " << assassin_id << " is targeting player " << target_id << std::endl;
+
+    if (assassin_id == *my_id) {
+      game->players[assassin_id].color = INVISIBLE;
+      is_assassin = true;
+      my_target_id = target_id;
+      
+      // Get the target's username if they exist in the game
+      if (game->players.count(target_id)) {
+        target_username = game->players[target_id].username;
+      } else {
+        target_username = "Unknown";
+      }
+      
+      std::cout << "Client: You are now the assassin! Your target is: " << target_username << std::endl;
+      std::cout << "Client: Assassin state changed from false to true" << std::endl;
+    }
+    
     break;
   }
   }
@@ -301,6 +356,11 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
       game_conf->colorindex = *mycolor;
       my_true_color = options[*mycolor];
 
+      std::cout << "Client: Selected color index: " << *mycolor << std::endl;
+      std::cout << "Client: Selected color: " << color_to_string(options[*mycolor]) << std::endl;
+      
+      std::cout << "Client: Color code being sent: " << color_to_uint(options[*mycolor]) << std::endl;
+
       std::string payload =
           *usernameprompt + " " + std::to_string(color_to_uint(options[*mycolor]));
       send_message(std::string("5\n").append(payload), sock);
@@ -340,6 +400,14 @@ void draw_ui(Color my_ui_color, playermap players,
   BeginUiDrawing();
 
   DrawFPS(0, 0);
+
+  if (is_assassin && my_target_id != -1) {
+    // draw assassin status box at top center
+    DrawRectangleScaleCentered(300, 10, 200, 60, DARKGRAY);
+    DrawTextScaleCentered("ASSASSIN MODE", 300, 20, 16, RED);
+    DrawTextScaleCentered("Target:", 300, 35, 12, WHITE);
+    DrawTextScaleCentered(target_username.c_str(), 300, 50, 12, YELLOW);
+  }
 
   // Base dimensions for UI elements
   float boxHeight = 50;
@@ -400,8 +468,11 @@ void draw_players(playermap players, ResourceManager *res_man, int my_id) {
     if (p.username == "unset" || (color_equal(p.color, INVISIBLE) && id != my_id))
       continue;
     Color clr = p.color;
-    if (id == my_id && color_equal(p.color, INVISIBLE)) {
-      // draw with transparency
+    if (id == my_id && is_assassin) {
+      // Always use true color for local player when assassin (with transparency)
+      DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
+    } else if (id == my_id && color_equal(p.color, INVISIBLE)) {
+      // draw with transparency using the original color
       DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
     } else {
       DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
@@ -411,12 +482,30 @@ void draw_players(playermap players, ResourceManager *res_man, int my_id) {
              p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
              BLACK);
 
-    DrawRectanglePro({(float)p.x + 50, (float)p.y + 50, 50, 20},
-                     {(float)100, (float)0}, p.rot, BLACK);
+    // Draw weapon - knife for assassin, gun for others
+    if (id == my_id && is_assassin) {
+      // Draw knife texture - positioned at distance from player center
+      float knife_distance = 60.0f;
+      float angle_rad = p.rot * DEG2RAD; 
+      float player_center_x = p.x + 50; 
+      float player_center_y = p.y + 50; 
+      float knife_x = player_center_x + cosf(angle_rad) * knife_distance;
+      float knife_y = player_center_y + sinf(angle_rad) * knife_distance;
+      
+      DrawTexturePro(res_man->getTex("assets/assassin_knife.png"), 
+                     {(float)0, (float)0, 16, 16}, // source rectangle
+                     {knife_x - 40, knife_y - 40, 80, 80}, // destination rectangle (centered on knife position)
+                     {(float)40, (float)40}, // origin for rotation
+                     p.rot, WHITE);
+    } else {
+      // Draw gun (normal rectangle)
+      DrawRectanglePro({(float)p.x + 50, (float)p.y + 50, 50, 20},
+                       {(float)100, (float)0}, p.rot, BLACK);
+    }
   }
 }
 
-bool move_gun(float *rot, int cx, int cy, Camera2D cam, float scale,
+bool move_wpn(float *rot, int cx, int cy, Camera2D cam, float scale,
               float offsetX, float offsetY) {
   // mouse position in window
   Vector2 windowMouse = GetMousePosition();
@@ -537,7 +626,7 @@ int main() {
     float offsetX = (GetScreenWidth() - scaledWidth) * 0.5f;
     float offsetY = (GetScreenHeight() - scaledHeight) * 0.5f;
 
-    bool moved_gun = move_gun(&game.players[my_id].rot, cx, cy, cam, scale,
+    bool moved_gun = move_wpn(&game.players[my_id].rot, cx, cy, cam, scale,
                               offsetX, offsetY);
 
     hasmoved = moved || moved_gun;
@@ -560,7 +649,7 @@ int main() {
       canshoot = true;
     }
 
-    if (IsMouseButtonDown(0) && canshoot) {
+    if (IsMouseButtonDown(0) && canshoot && game.players[my_id].weapon_id == 0 && !is_assassin) {
       canshoot = false;
       bdelay = 20;
       float bspeed = 10;
@@ -576,6 +665,14 @@ int main() {
       send_message(
           std::string("10\n ").append(std::to_string(game.players[my_id].rot)),
           sock);
+    }
+
+    // if assassin and knife touching player, kill them (not implemented yet)
+    if (is_assassin) {
+      if (CheckCollisionCircleRec(Vector2{(float)game.players[my_id].x + 50, (float)game.players[my_id].y + 50}, 50,
+                                  Rectangle{(float)game.players[my_id].x, (float)game.players[my_id].y, 100, 100})) {
+        game.players[my_id].color = RED;
+      }
     }
 
     // draw to render texture
