@@ -51,6 +51,8 @@ std::unordered_map<int, client> clients;
 std::mutex running_mutex;
 std::map<int, bool> is_running;
 
+int last_assassin_id = -1;  // Track the previous assassin
+
 void perform_shutdown() {
   // try to exit gracefully
   try {
@@ -278,6 +280,54 @@ enum EventType {
   Assasin = 1
 };
 
+void select_new_target(int assassin_id) {
+  std::scoped_lock all_locks(game_mutex, assassin_mutex, clients_mutex);
+  
+  // find a random target for the assassin
+  std::vector<int> potential_targets;
+  for (const auto& [player_id, player] : game.players) {
+    // don't target the assassin or the previous target
+    if (player_id != assassin_id && 
+        player_id != assassin_target_id && 
+        !color_equal(player.color, INVISIBLE)) {
+      potential_targets.push_back(player_id);
+    }
+  }
+  
+  if (!potential_targets.empty()) {
+    int random_index = random_int(0, potential_targets.size() - 1);
+    int new_target_id = potential_targets[random_index];
+    assassin_target_id = new_target_id;
+    
+    // send assassin event message to the assassin
+    std::ostringstream event_response;
+    event_response << "15\n" << assassin_id << " " << assassin_target_id;
+    
+    auto assassin_client = clients.find(assassin_id);
+    if (assassin_client != clients.end()) {
+      send_message(event_response.str(), assassin_client->second.first);
+    }
+    
+    std::cout << "Assassin " << assassin_id << " has a new target: " << assassin_target_id << std::endl;
+  } else {
+    std::cout << "No more targets available for assassin " << assassin_id << std::endl;
+    // End assassin event since no more targets
+    if (game.players.count(assassin_id)) {
+      game.players.at(assassin_id).color = original_assassin_color;
+      
+      std::ostringstream response;
+      response << "5\n" // MSG_PLAYER_UPDATE
+               << assassin_id << " "
+               << game.players.at(assassin_id).username << " "
+               << color_to_uint(original_assassin_color);
+      
+      broadcast_message(response.str(), clients);
+    }
+    assassin_id = -1;
+    assassin_target_id = -1;
+  }
+}
+
 void make_player_assassin(int target_id) {
   std::scoped_lock all_locks(game_mutex, assassin_mutex, clients_mutex);
   
@@ -293,9 +343,9 @@ void make_player_assassin(int target_id) {
     return;
   }
 
-  // Check if this player has already been an assassin
-  if (used_assassin_ids.find(target_id) != used_assassin_ids.end()) {
-    std::cout << "Player " << target_id << " has already been an assassin. Skipping." << std::endl;
+  // Only prevent consecutive assassin roles
+  if (target_id == last_assassin_id) {
+    std::cout << "Player " << target_id << " was the last assassin. Skipping." << std::endl;
     return;
   }
 
@@ -303,7 +353,6 @@ void make_player_assassin(int target_id) {
   assassin_id = target_id;
   original_assassin_color = game.players.at(target_id).color;
   assassin_start_time = std::chrono::steady_clock::now();
-  used_assassin_ids.insert(target_id); // Mark this player as used
 
   std::cout << "Server: Storing original color for player " << target_id << " as " << color_to_string(original_assassin_color) << std::endl;
 
@@ -636,7 +685,10 @@ int main() {
               // handle assassination
               if (collision_occurred) {
                 std::cout << "ASSASSIN SUCCESS! Player " << current_assassin_id << " hit target " << current_target_id << std::endl;
-                // TODO: handle assassination
+                // Store current assassin as last assassin
+                last_assassin_id = current_assassin_id;
+                // Select new target
+                select_new_target(current_assassin_id);
               }
               
               // Broadcast movement to other clients
