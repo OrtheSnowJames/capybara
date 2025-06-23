@@ -25,20 +25,10 @@
 #include <chrono>
 #include <csignal>
 #include <set>
+#include <atomic>
 
 static int server_socket_fd = -1;
-
-void shutdown_server(int signum) {
-  std::cout << "\nSignal " << signum << " received. Shutting down." << std::endl;
-  std::thread([&]() {
-    if (server_socket_fd != -1) {
-      close(server_socket_fd);
-    }
-    exit(signum);
-  }).detach();
-  std::this_thread::sleep_for(std::chrono::seconds(5));
-  _Exit(1);
-}
+std::atomic<bool> server_running{true};
 
 std::mutex game_mutex;
 Game game;
@@ -61,8 +51,59 @@ std::unordered_map<int, client> clients;
 std::mutex running_mutex;
 std::map<int, bool> is_running;
 
+void perform_shutdown() {
+  // try to exit gracefully
+  try {
+    if (server_socket_fd != -1) {
+      std::cout << "Closing server socket..." << std::endl;
+      shutdown(server_socket_fd, SHUT_RDWR);
+      close(server_socket_fd);
+    }
+
+    // Clear any pending packets first
+    {
+      std::lock_guard<std::mutex> packets_lock(packets_mutex);
+      packets.clear();
+    }
+
+    // stop existing clients
+    {
+      std::scoped_lock lock(clients_mutex);
+      for (auto& [id, client_pair] : clients) {
+        if (client_pair.second && client_pair.second->joinable()) {
+          shutdown(client_pair.first, SHUT_RDWR);
+          close(client_pair.first);
+          client_pair.second->join();
+        }
+      }
+      clients.clear();
+    }
+    
+    std::cout << "Attempting graceful shutdown..." << std::endl;
+    exit(0);
+  } catch (const std::exception& e) {
+    std::cerr << "Error during shutdown: " << e.what() << std::endl;
+    exit(1);
+  }
+}
+
+void shutdown_server(int signum) {
+  std::cout << "\nSignal " << signum << " received. Shutting down." << std::endl;
+  server_running = false;
+  
+  std::thread shutdown_thread(perform_shutdown);
+  shutdown_thread.detach();
+  
+  std::thread force_exit([]() {
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    std::cout << "Force exit after timeout" << std::endl;
+    _Exit(1);
+  });
+  force_exit.detach();
+}
+
 void handle_client(int client, int id) {
-  {
+  try {
     {
       std::lock_guard<std::mutex> lock(game_mutex);
       Player p(100, 100);
@@ -73,7 +114,8 @@ void handle_client(int client, int id) {
 
     std::ostringstream out;
     {
-      std::lock_guard<std::mutex> lock(game_mutex);
+      // Use scoped_lock to acquire both mutexes atomically
+      std::scoped_lock lock(game_mutex, assassin_mutex);
 
       for (auto &[k, v] : game.players) {
         // sanitize
@@ -85,29 +127,40 @@ void handle_client(int client, int id) {
           if (c == ';' || c == ':' || c == ' ')
             c = '_';
         }
-        // sanitize color
-        uint col = color_to_uint(v.color);
-        if (col > 5)
-          col = 1;
+        
+        unsigned int color_code = color_to_uint(v.color);
+        if (k == assassin_id) {
+          color_code = color_to_uint(INVISIBLE);
+        }
+        
         out << ':' << k << ' ' << v.x << ' ' << v.y << ' ' << safe_username
-            << ' ' << col << ' ' << v.weapon_id;
+            << ' ' << color_code << ' ' << v.weapon_id;
       }
     }
 
     // unlock mutex
     std::string payload = out.str();
-
     std::string msg = "0\n" + payload;
-
     send_message(msg, client);
+  } catch (const std::exception& e) {
+    std::cerr << "Client " << id << " error: " << e.what() << std::endl;
   }
-  sleep(3);
 
   std::string msg_id = "1\n" + std::to_string(id);
-
   send_message(msg_id, client);
 
   std::cout << "Client " << msg_id << " has joined.\n";
+
+  // If there's an active assassin, send the assassin event message to the new client
+  {
+    std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
+    if (assassin_id != -1 && assassin_target_id != -1) {
+      std::ostringstream event_response;
+      event_response << "15\n" << assassin_id << " " << assassin_target_id;
+      send_message(event_response.str(), client);
+      std::cout << "Sent assassin state to new client " << id << std::endl;
+    }
+  }
 
   std::ostringstream out;
 
@@ -171,6 +224,14 @@ void handle_client(int client, int id) {
     is_running[id] = false;
     std::lock_guard<std::mutex> _lock(game_mutex);
     game.players.erase(id);
+    
+    // Check if disconnected player was assassin
+    std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
+    if (id == assassin_id) {
+      std::cout << "Assassin (ID: " << id << ") disconnected. Ending assassin event." << std::endl;
+      assassin_id = -1;
+      assassin_target_id = -1;
+    }
   }
 
   std::cout << "Client " << id << " disconnected.\n";
@@ -228,14 +289,16 @@ enum EventType {
 };
 
 void make_player_assassin(int target_id) {
+  // Always acquire locks in the same order: game_mutex first, then assassin_mutex
+  std::lock_guard<std::mutex> game_lock(game_mutex);
   std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
+  
   if (assassin_id != -1) {
     std::cout << "Command failed: An assassin event is already active."
               << std::endl;
     return;
   }
 
-  std::lock_guard<std::mutex> game_lock(game_mutex);
   if (game.players.find(target_id) == game.players.end()) {
     std::cout << "Command failed: Player with ID " << target_id
               << " not found." << std::endl;
@@ -278,6 +341,7 @@ void make_player_assassin(int target_id) {
     std::ostringstream event_response;
     event_response << "15\n" << target_id << " " << assassin_target_id;
     
+    std::lock_guard<std::mutex> clients_lock(clients_mutex);
     auto assassin_client = clients.find(target_id);
     if (assassin_client != clients.end()) {
       send_message(event_response.str(), assassin_client->second.first);
@@ -296,7 +360,6 @@ void make_player_assassin(int target_id) {
            << target_id << " " << game.players.at(target_id).username << " "
            << color_to_uint(INVISIBLE);
 
-  std::lock_guard<std::mutex> clients_lock(clients_mutex);
   broadcast_message(response.str(), clients);
 }
 
@@ -388,10 +451,19 @@ void handle_stdin_commands() {
 }
 
 void accept_clients(int sock) {
-  while (true) {
+  while (server_running) {
     int client = accept(sock, nullptr, nullptr);
+    if (!server_running) break;
+    
+    if (client < 0) {
+      if (errno != EINTR) {  // Ignore interrupts
+        perror("Accept failed");
+      }
+      continue;
+    }
+    
     int id = 0;
-    while (1) {
+    while (server_running) {
       int id_init = id;
       {
         std::lock_guard<std::mutex> game_lock(game_mutex);
@@ -405,11 +477,15 @@ void accept_clients(int sock) {
     }
 
     std::lock_guard<std::mutex> lock(clients_mutex);
-    clients[id] = std::make_pair(
-        client, std::make_shared<std::thread>(handle_client, client, id));
+    if (server_running) {
+      clients[id] = std::make_pair(
+          client, std::make_shared<std::thread>(handle_client, client, id));
 
-    std::lock_guard<std::mutex> _(running_mutex);
-    is_running[id] = true;
+      std::lock_guard<std::mutex> _(running_mutex);
+      is_running[id] = true;
+    } else {
+      close(client);
+    }
   }
 }
 
@@ -453,261 +529,218 @@ int main() {
   std::cout << "Running.\n";
 
   std::signal(SIGINT, shutdown_server); // handle SIGINT
-  // handle game stuff
-  while (1) {
-    // Check for assassin timeout
+
+  while (server_running) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    // terminate disconnected clients
+    std::list<int> to_remove;
     {
-      std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
-      if (assassin_id != -1) {
-        auto now = std::chrono::steady_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::seconds>(
-                            now - assassin_start_time)
-                            .count();
-
-        if (duration >= 60) {
-          std::cout << "Assassin event ended for player " << assassin_id
-                    << std::endl;
-
-          // Prepare variables to store the data we need
-          std::string username;
-          bool player_exists = false;
-
-          {
-            std::lock_guard<std::mutex> game_lock(game_mutex);
-            if (game.players.count(assassin_id)) {
-              Color old_color = game.players.at(assassin_id).color;
-              game.players.at(assassin_id).color = original_assassin_color;
-              username = game.players.at(assassin_id).username;
-              player_exists = true;
-
-              std::cout << "Server: Player " << assassin_id << " color changed from INVISIBLE back to " << color_to_string(original_assassin_color) << " (assassin event ended)" << std::endl;
-            } else {
-              std::cout << "Player " << assassin_id
-                        << " (assassin) already disconnected. Event over."
-                        << std::endl;
-            }
-          }
-
-          // Now prepare the response message with the retrieved data
-          if (player_exists) {
-            std::ostringstream response;
-            response << "5\n" // MSG_PLAYER_UPDATE
-                     << assassin_id << " "
-                     << username << " "
-                     << color_to_uint(original_assassin_color);
-
-            // Send the message
-            {
-              std::lock_guard<std::mutex> clients_lock(clients_mutex);
-              broadcast_message(response.str(), clients);
-            }
-          }
-
-          // Reset assassin state
-          assassin_id = -1;
-        }
-      }
-    }
-
-    {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      
-      std::list<int> to_remove;
-      {
-        std::lock_guard<std::mutex> lo(running_mutex);
+      std::lock_guard<std::mutex> lo(running_mutex);
+      if (!is_running.empty()) {
         for (auto &[id, v] : is_running) {
           if (!v) {
             to_remove.push_back(id);
           }
         }
       }
-      
+    }
+
+    if (!to_remove.empty()) {
       std::lock_guard<std::mutex> a(clients_mutex);
       for (int i : to_remove) {
-        if (clients[i].second.get()->joinable())
-          clients[i].second.get()->join();
-
-        shutdown(clients[i].first, SHUT_RDWR);
-
-        close(clients[i].first);
-        
-        {
-          std::lock_guard<std::mutex> running_lock(running_mutex);
-          is_running.erase(i);
-        }
-        
-        clients.erase(i);
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        std::string out("4\n" + std::to_string(i));
-        for (auto &pair : clients) {
-          if (pair.first != i) {
-            send_message(out, pair.second.first);
-          } else {
+        try {
+          auto client_it = clients.find(i);
+          if (client_it == clients.end()) {
+            continue;
           }
-        }
+          
+          int socket_fd = client_it->second.first;
+          auto thread_ptr = client_it->second.second;
+          
+          if (thread_ptr && thread_ptr->joinable()) {
+            thread_ptr->join();
+          }
 
-        {
-          std::lock_guard<std::mutex> b(game_mutex);
-          game.players.erase(i);
+          if (socket_fd != -1) {
+            shutdown(socket_fd, SHUT_RDWR);
+            close(socket_fd);
+          }
+
+          clients.erase(client_it);
+
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+          std::string out("4\n" + std::to_string(i));
+          for (const auto& [client_id, client_data] : clients) {
+            if (client_id != i && client_data.first != -1) {
+              send_message(out, client_data.first);
+            }
+          }
+
+          {
+            std::lock_guard<std::mutex> b(game_mutex);
+            game.players.erase(i);
+          }
+
+          {
+            std::lock_guard<std::mutex> running_lock(running_mutex);
+            is_running.erase(i);
+          }
+
+          std::cout << "Removed client " << i << std::endl;
+        } catch (const std::exception& e) {
+          std::cerr << "Error cleaning up client " << i << ": " << e.what() << std::endl;
         }
-        std::cout << "Removed client " << i << std::endl;
       }
     }
 
-    // ---------------------------------
-
+    // process packets
     {
       std::lock_guard<std::mutex> lock(packets_mutex);
+      if (!packets.empty()) {
+        packetlist current_packets;
+        current_packets.swap(packets);
+        
+        for (const auto& [from_id, packet] : current_packets) {
+          try {
+            if (packet.empty()) continue;
 
-      for (auto &[from_id, packet] : packets) {
+            int packet_type = std::stoi(packet.substr(0, packet.find('\n')));
+            std::string payload = packet.substr(packet.find('\n') + 1);
 
-        int packet_type = std::stoi(packet.substr(0, packet.find('\n')));
-        std::string payload = packet.substr(packet.find('\n') + 1);
-
-        switch (packet_type) {
-        case 2: {
-          // First, get the movement data and check for assassin collision
-          std::istringstream j(payload);
-          int x, y;
-          float rot;
-          j >> x >> y >> rot;
-          
-          bool collision_occurred = false;
-          int current_assassin_id = -1;
-          int current_target_id = -1;
-          
-          // Check assassin collision first (outside of game lock)
-          {
-            std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
-            if (assassin_id == from_id && assassin_target_id != -1) {
-              current_assassin_id = assassin_id;
-              current_target_id = assassin_target_id;
-            }
-          }
-          
-          // Now update game state and check collision
-          {
-            std::lock_guard<std::mutex> z(game_mutex);
-            if (game.players.find(from_id) == game.players.end())
-              break;
-            game.players.at(from_id).x = x;
-            game.players.at(from_id).y = y;
-            game.players.at(from_id).rot = rot;
-            
-            // Check collision if this player is an assassin
-            if (current_assassin_id == from_id && current_target_id != -1) {
-              if (check_assassin_collision(current_assassin_id, current_target_id, x, y, rot)) {
-                collision_occurred = true;
+            switch (packet_type) {
+            case 2: {
+              // get the movement data 
+              std::istringstream j(payload);
+              int x, y;
+              float rot;
+              j >> x >> y >> rot;
+              
+              bool collision_occurred = false;
+              int current_assassin_id = -1;
+              int current_target_id = -1;
+              
+              // check assassin collision first
+              {
+                std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
+                if (assassin_id == from_id && assassin_target_id != -1) {
+                  current_assassin_id = assassin_id;
+                  current_target_id = assassin_target_id;
+                }
               }
+              
+              // update game state and check collision
+              {
+                std::lock_guard<std::mutex> z(game_mutex);
+                if (game.players.find(from_id) == game.players.end())
+                  break;
+                game.players.at(from_id).x = x;
+                game.players.at(from_id).y = y;
+                game.players.at(from_id).rot = rot;
+                
+                // check if this player is an assassin
+                if (current_assassin_id == from_id && current_target_id != -1) {
+                  if (check_assassin_collision(current_assassin_id, current_target_id, x, y, rot)) {
+                    collision_occurred = true;
+                  }
+                }
+              }
+
+              // handle assassination
+              if (collision_occurred) {
+                std::cout << "ASSASSIN SUCCESS! Player " << current_assassin_id << " hit target " << current_target_id << std::endl;
+                // TODO: handle assassination
+              }
+              
+              // Broadcast movement to other clients
+              std::lock_guard<std::mutex> clients_lock(clients_mutex);
+              for (const auto& [client_id, client_data] : clients) {
+                if (client_id != from_id && client_data.first != -1) {
+                  std::ostringstream out;
+                  out << "2\n" << from_id << " " << payload;
+                  send_message(out.str(), client_data.first);
+                }
+              }
+            } break;
+            case 5: { // MSG_PLAYER_UPDATE
+              std::istringstream iss(payload);
+              std::string username;
+              unsigned int color_code;
+              iss >> username >> color_code;
+
+              if (iss.fail()) {
+                std::cerr << "Invalid MSG_PLAYER_UPDATE from " << from_id << ": "
+                          << payload << std::endl;
+                break;
+              }
+
+              std::string sanitized_user = sanitize_username(username);
+
+              {
+                std::lock_guard<std::mutex> lock(game_mutex);
+                game.players[from_id].username = sanitized_user;
+                game.players[from_id].color = uint_to_color(color_code);
+              }
+
+              std::ostringstream response;
+              response << "5\n"
+                       << from_id << " " << sanitized_user << " " << color_code;
+              broadcast_message(response.str(), clients, from_id);
+
+            } break;
+            case 6: {
+              std::lock_guard<std::mutex> lock(game_mutex);
+              unsigned int x = (unsigned int)std::stoi(payload);
+              game.players[from_id].color = uint_to_color(x);
+              std::lock_guard<std::mutex> clients_lock(clients_mutex);
+              for (const auto& [client_id, client_data] : clients) {
+                if (client_id != from_id && client_data.first != -1) {
+                  send_message(std::string("6\n")
+                                 .append(std::to_string(from_id))
+                                 .append(" ")
+                                 .append(payload),
+                             client_data.first);
+                }
+              }
+            } break;
+            case 10: {
+              std::lock_guard<std::mutex> lock(game_mutex);
+              float rot = std::stof(payload);
+
+              float angleRad = (-game.players[from_id].rot + 5) * DEG2RAD;
+              float bspeed = 10;
+
+              Vector2 dir =
+                  Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -bspeed);
+              Vector2 spawnOffset =
+                  Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -120);
+              Vector2 origin = {(float)game.players[from_id].x + 50,
+                                (float)game.players[from_id].y + 50};
+              Vector2 spawnPos = Vector2Add(origin, spawnOffset);
+              game.bullets.push_back(
+                  Bullet((int)spawnPos.x, (int)spawnPos.y, dir, from_id));
+              std::lock_guard<std::mutex> clients_lock(clients_mutex);
+              std::ostringstream j;
+              j << "10\n"
+                << from_id << ' ' << (int)spawnPos.x << ' ' << (int)spawnPos.y
+                << ' ' << rot;
+              std::cout << j.str() << '\n';
+              broadcast_message(j.str(), clients, from_id);
+            } break;
+            default:
+              std::cerr << "INVALID PACKET TYPE: " << packet_type << std::endl;
+              break;
             }
+          } catch (const std::exception& e) {
+            std::cerr << "Error processing packet: " << e.what() << std::endl;
           }
-          
-          // Handle collision outside of any locks
-          if (collision_occurred) {
-            std::cout << "ASSASSIN SUCCESS! Player " << current_assassin_id << " eliminated target " << current_target_id << std::endl;
-            
-            // TODO: Handle successful assassination
-            // - Remove target from game
-            // - End assassin event
-            // - Award points/notify players
-            // - Start new round or event
-            
-            // Placeholder: just log the success for now
-            std::cout << "Target eliminated! Assassin event completed." << std::endl;
-          }
-          
-          // Broadcast movement to other clients
-          for (auto &pair : clients) {
-            if (pair.first != from_id) {
-              std::ostringstream out;
-              out << "2\n" << from_id << " " << payload;
-              send_message(out.str(), pair.second.first);
-            }
-          }
-        }
-          for (auto &pair : clients) {
-            if (pair.first != from_id) {
-              std::ostringstream out;
-              out << "2\n" << from_id << " " << payload;
-              send_message(out.str(), pair.second.first);
-            }
-          }
-          break;
-        case 5: { // MSG_PLAYER_UPDATE
-          std::istringstream iss(payload);
-          std::string username;
-          unsigned int color_code;
-          iss >> username >> color_code;
-
-          if (iss.fail()) {
-            std::cerr << "Invalid MSG_PLAYER_UPDATE from " << from_id << ": "
-                      << payload << std::endl;
-            break;
-          }
-
-          std::string sanitized_user = sanitize_username(username);
-
-          {
-            std::lock_guard<std::mutex> lock(game_mutex);
-            game.players[from_id].username = sanitized_user;
-            game.players[from_id].color = uint_to_color(color_code);
-          }
-
-          std::ostringstream response;
-          response << "5\n"
-                   << from_id << " " << sanitized_user << " " << color_code;
-          broadcast_message(response.str(), clients, from_id);
-
-        } break;
-        case 6: {
-          std::lock_guard<std::mutex> lock(game_mutex);
-          unsigned int x = (unsigned int)std::stoi(payload);
-          game.players[from_id].color = uint_to_color(x);
-          std::lock_guard<std::mutex> lokc(clients_mutex);
-          for (auto &[k, v] : clients) {
-            if (k == from_id)
-              continue;
-            send_message(std::string("6\n")
-                             .append(std::to_string(from_id))
-                             .append(" ")
-                             .append(payload),
-                         v.first);
-          }
-        } break;
-        case 10: {
-          std::lock_guard<std::mutex> lock(game_mutex);
-          float rot = std::stof(payload);
-
-          float angleRad = (-game.players[from_id].rot + 5) * DEG2RAD;
-          float bspeed = 10;
-
-          Vector2 dir =
-              Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -bspeed);
-          Vector2 spawnOffset =
-              Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -120);
-          Vector2 origin = {(float)game.players[from_id].x + 50,
-                            (float)game.players[from_id].y + 50};
-          Vector2 spawnPos = Vector2Add(origin, spawnOffset);
-          game.bullets.push_back(
-              Bullet((int)spawnPos.x, (int)spawnPos.y, dir, from_id));
-          std::lock_guard<std::mutex> c_lock(clients_mutex);
-          std::ostringstream j;
-          j << "10\n"
-            << from_id << ' ' << (int)spawnPos.x << ' ' << (int)spawnPos.y
-            << ' ' << rot;
-          std::cout << j.str() << '\n';
-          broadcast_message(j.str(), clients, from_id);
-          break;
-        }
-        default:
-          std::cerr << "INVALID PACKET TYPE: " << packet_type << std::endl;
-          break;
         }
       }
-      packets.clear();
     }
   }
-  close(sock);
+
+  // Wait a bit for threads to notice server_running is false
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  return 0;
 }

@@ -502,7 +502,7 @@ void draw_players(playermap players, ResourceManager *res_man, int my_id) {
     } else if (color_equal(p.color, INVISIBLE) && id != my_id) {
       if (players.count(my_id)) {
         float distance = sqrtf(powf(p.x - players[my_id].x, 2) + powf(p.y - players[my_id].y, 2));
-        float close_distance = 300.0f; 
+        float close_distance = 200.0f; 
         
         if (distance <= close_distance) {
           Vector2 player_center = {(float)p.x + 50, (float)p.y + 50};
