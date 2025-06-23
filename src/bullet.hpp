@@ -12,7 +12,7 @@ public:
   Bullet(int x, int y, Vector2 vel, int from_id)
       : x(x), y(y), vel(vel), shotby_id(from_id) {}
 
-  Bullet() : x(0), y(0), vel((Vector2){0, 0}) {}
+  Bullet() : x(0), y(0), vel(Vector2{0, 0}) {}
 
   void move() {
     x += vel.x;

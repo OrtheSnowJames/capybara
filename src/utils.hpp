@@ -1,17 +1,15 @@
 #ifndef UTILS_H
 #define UTILS_H
 
-#include "player.hpp"
 #include "raylib.h"
+#include "player.hpp"
 #include "constants.hpp"
 #include "drawScale.hpp"
-#include <arpa/inet.h>
+#include "networking.hpp"
 #include <cstdio>
 #include <map>
 #include <memory>
-#include <netinet/in.h>
 #include <string>
-#include <sys/socket.h>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -98,8 +96,8 @@ struct ColorCompare {
 inline void send_message(std::string msg, int sock) {
   msg.push_back(';');
   const char *msg_str = msg.c_str();
-  if (send(sock, msg_str, msg.size(), 0) < 0) {
-    perror("error sending message");
+  if (send_data(sock, msg_str, msg.size(), 0) < 0) {
+    print_socket_error("error sending message");
   }
 }
 
@@ -172,7 +170,7 @@ T random_enum_element(T first, T last) {
 }
 
 void DrawTextureAlpha(Texture2D texture, int x, int y, unsigned char alpha) {
-  Color tint = (Color){255, 255, 255, alpha};
+  Color tint = Color{255, 255, 255, alpha};
   DrawTexture(texture, x, y, tint);
 }
 

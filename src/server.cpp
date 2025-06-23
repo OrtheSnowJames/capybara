@@ -1,9 +1,9 @@
 #include "constants.hpp"
 #include "game.hpp"
 #include "math.h"
+#include "networking.hpp"
 #include "player.hpp"
 #include "utils.hpp"
-#include <arpa/inet.h>
 #include <cstdio>
 #include <iostream>
 #include <cstdlib>
@@ -11,14 +11,11 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <netinet/in.h>
 #include <raylib.h>
 #include <raymath.h>
 #include <sstream>
 #include <string>
-#include <sys/socket.h>
 #include <thread>
-#include <unistd.h>
 #include <unordered_map>
 #include <utility>
 #include <random>
@@ -61,8 +58,7 @@ std::set<int> previous_targets;  // previous targets
 // Lock order: game_mutex -> assassin_mutex -> pending_assassin_mutex -> clients_mutex
 // This order must be maintained in all functions to prevent deadlocks
 
-void clear_assassin_state() {
-  std::scoped_lock all_locks(game_mutex, assassin_mutex, pending_assassin_mutex, clients_mutex);
+void clear_assassin_state_unlocked() {
   std::cout << "Clearing assassin state" << std::endl;
   
   // reset assassin IDs
@@ -79,13 +75,18 @@ void clear_assassin_state() {
   assassin_start_time = std::chrono::steady_clock::now();
 }
 
+void clear_assassin_state() {
+  std::scoped_lock all_locks(game_mutex, assassin_mutex, pending_assassin_mutex, clients_mutex);
+  clear_assassin_state_unlocked();
+}
+
 void perform_shutdown() {
   // try to exit gracefully
   try {
     if (server_socket_fd != -1) {
       std::cout << "Closing server socket..." << std::endl;
-      shutdown(server_socket_fd, SHUT_RDWR);
-      close(server_socket_fd);
+      shutdown_socket(server_socket_fd, SHUTDOWN_BOTH);
+      close_socket(server_socket_fd);
     }
 
     // Clear any pending packets first
@@ -99,8 +100,8 @@ void perform_shutdown() {
       std::scoped_lock lock(clients_mutex);
       for (auto& [id, client_pair] : clients) {
         if (client_pair.second && client_pair.second->joinable()) {
-          shutdown(client_pair.first, SHUT_RDWR);
-          close(client_pair.first);
+          shutdown_socket(client_pair.first, SHUTDOWN_BOTH);
+          close_socket(client_pair.first);
           client_pair.second->join();
         }
       }
@@ -215,7 +216,7 @@ void handle_client(int client, int id) {
   while (running) {
     char buffer[1024];
 
-    int received = recv(client, buffer, sizeof(buffer), 0);
+    int received = recv_data(client, buffer, sizeof(buffer), 0);
 
     if (received <= 0)
       break;
@@ -255,7 +256,7 @@ void handle_client(int client, int id) {
                  << color_to_uint(original_assassin_color);
         broadcast_message(response.str(), clients);
       }
-      clear_assassin_state();
+      clear_assassin_state_unlocked();
     }
   }
 
@@ -492,7 +493,7 @@ void check_pending_assassins() {
         
         broadcast_message(response.str(), clients);
       }
-      clear_assassin_state();
+      clear_assassin_state_unlocked();
       return;
     }
   }
@@ -550,7 +551,7 @@ void handle_stdin_commands() {
 
 void accept_clients(int sock) {
   while (server_running) {
-    int client = accept(sock, nullptr, nullptr);
+    int client = accept_connection(sock, nullptr, nullptr);
     if (!server_running) break;
     
     if (client < 0) {
@@ -582,40 +583,38 @@ void accept_clients(int sock) {
       std::lock_guard<std::mutex> _(running_mutex);
       is_running[id] = true;
     } else {
-      close(client);
+      close_socket(client);
     }
   }
 }
 
 int main() {
-  int sock = socket(AF_INET, SOCK_STREAM, 0);
+  int sock = create_socket(ADDRESS_FAMILY_INET, SOCKET_STREAM, 0);
   if (sock < 0) {
     perror("Failed to create socket");
     return -1;
   }
   server_socket_fd = sock;
 
-  sockaddr_in sock_addr;
-  sock_addr.sin_family = AF_INET;
-  sock_addr.sin_port = htons(50000);
-  sock_addr.sin_addr.s_addr = INADDR_ANY;
-
+  socket_address_in sock_addr;
+  sock_addr.sin_family = ADDRESS_FAMILY_INET;
+  sock_addr.sin_port = host_to_network_short(50000);
+  sock_addr.sin_addr.s_addr = ADDRESS_ANY;
 
   int yes = 1;
-  setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+  set_socket_option(sock, SOCKET_LEVEL, SOCKET_REUSEADDR, &yes, sizeof(yes));
   try {
-    setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(yes)); // might not work on macos
+    set_socket_option(sock, SOCKET_LEVEL, SOCKET_REUSEPORT, &yes, sizeof(yes)); // might not work on macos
   } catch (const std::exception& e) {
     std::cerr << "Error setting SO_REUSEPORT: " << e.what() << std::endl;
   }
 
-
-  if (bind(sock, (struct sockaddr *)&sock_addr, sizeof(sock_addr)) < 0) {
+  if (bind_socket(sock, (struct sockaddr *)&sock_addr, sizeof(sock_addr)) < 0) {
     perror("Failed to bind socket");
     return -1;
   }
 
-  if (listen(sock, 5) < 0) {
+  if (listen_socket(sock, 5) < 0) {
     perror("Failed to listen on socket");
     return -1;
   }
@@ -662,13 +661,13 @@ int main() {
           
           if (thread_ptr && thread_ptr->joinable()) {
             if (socket_fd != -1) {
-              shutdown(socket_fd, SHUT_RDWR);
+              shutdown_socket(socket_fd, SHUTDOWN_BOTH);
             }
 
             thread_ptr->join();
 
             if (socket_fd != -1) {
-              close(socket_fd);
+              close_socket(socket_fd);
             }
           }
 
@@ -753,7 +752,7 @@ int main() {
                 
                 // Set assassin to target themselves for 5 seconds
                 {
-                    std::scoped_lock locks(assassin_mutex, pending_assassin_mutex);
+                    std::scoped_lock locks(game_mutex, assassin_mutex, pending_assassin_mutex, clients_mutex);
                     assassin_target_id = current_assassin_id;  // Target self
                     pending_assassins[current_assassin_id] = std::chrono::steady_clock::now();
                     
@@ -770,12 +769,14 @@ int main() {
               }
               
               // Broadcast movement to other clients
-              std::lock_guard<std::mutex> clients_lock(clients_mutex);
-              for (const auto& [client_id, client_data] : clients) {
-                if (client_id != from_id && client_data.first != -1) {
-                  std::ostringstream out;
-                  out << "2\n" << from_id << " " << payload;
-                  send_message(out.str(), client_data.first);
+              {
+                std::lock_guard<std::mutex> clients_lock(clients_mutex);
+                for (const auto& [client_id, client_data] : clients) {
+                  if (client_id != from_id && client_data.first != -1) {
+                    std::ostringstream out;
+                    out << "2\n" << from_id << " " << payload;
+                    send_message(out.str(), client_data.first);
+                  }
                 }
               }
             } break;
@@ -806,10 +807,12 @@ int main() {
 
             } break;
             case 6: {
-              std::lock_guard<std::mutex> lock(game_mutex);
               unsigned int x = (unsigned int)std::stoi(payload);
+              
+              std::scoped_lock locks(game_mutex, clients_mutex);
+              
               game.players[from_id].color = uint_to_color(x);
-              std::lock_guard<std::mutex> clients_lock(clients_mutex);
+              
               for (const auto& [client_id, client_data] : clients) {
                 if (client_id != from_id && client_data.first != -1) {
                   send_message(std::string("6\n")
@@ -821,8 +824,9 @@ int main() {
               }
             } break;
             case 10: {
-              std::lock_guard<std::mutex> lock(game_mutex);
               float rot = std::stof(payload);
+              
+              std::scoped_lock locks(game_mutex, clients_mutex);
 
               float angleRad = (-game.players[from_id].rot + 5) * DEG2RAD;
               float bspeed = 10;
@@ -836,7 +840,7 @@ int main() {
               Vector2 spawnPos = Vector2Add(origin, spawnOffset);
               game.bullets.push_back(
                   Bullet((int)spawnPos.x, (int)spawnPos.y, dir, from_id));
-              std::lock_guard<std::mutex> clients_lock(clients_mutex);
+              
               std::ostringstream j;
               j << "10\n"
                 << from_id << ' ' << (int)spawnPos.x << ' ' << (int)spawnPos.y
@@ -874,21 +878,21 @@ int main() {
     // close sock
     if (server_socket_fd != -1) {
       std::cout << "Closing server socket..." << std::endl;
-      shutdown(server_socket_fd, SHUT_RDWR);
-      close(server_socket_fd);
+      shutdown_socket(server_socket_fd, SHUTDOWN_BOTH);
+      close_socket(server_socket_fd);
     }
 
     // terminate clients
     for (auto& [id, client_pair] : clients) {
       if (client_pair.second && client_pair.second->joinable()) {
         if (client_pair.first != -1) {
-          shutdown(client_pair.first, SHUT_RDWR);
+          shutdown_socket(client_pair.first, SHUTDOWN_BOTH);
         }
 
         client_pair.second->join();
 
         if (client_pair.first != -1) {
-          close(client_pair.first);
+          close_socket(client_pair.first);
         }
       }
     }
