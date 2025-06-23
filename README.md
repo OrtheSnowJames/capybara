@@ -6,15 +6,14 @@ A CPP game made using native POSIX sockets.
 ## Gameplay
 
 ### Start
-On starting the game, it will ask you for your name and color. Use the keyboard to enter name and arrows to select color.
+On starting the game, it will ask you for your name and color. Use the keyboard to enter name and arrows to select color. You can press ";" to save your settings.
 Press enter to start.
 
 ### Movement
 Use WASD to move around.
 
 ### Shooting
-(not implemented yet)
-Click in the direction you want to shoot to shoot. This will fire a bullet.
+Click in the direction you want to shoot to fire a bullet. You can use the minimap to see player locations.
 
 ## Setup
 
