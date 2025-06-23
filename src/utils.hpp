@@ -15,6 +15,11 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <random>
+#include <algorithm>
+#include <cctype>
+
+const Color INVISIBLE = BLANK;
 
 typedef std::map<int, Player> playermap;
 typedef std::pair<int, std::shared_ptr<std::thread>> client;
@@ -33,6 +38,16 @@ inline bool color_equal(Color a, Color b) {
   return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
 }
 
+inline std::string color_to_string(Color c) {
+  if (color_equal(c, RED)) return "RED";
+  else if (color_equal(c, GREEN)) return "GREEN";
+  else if (color_equal(c, YELLOW)) return "YELLOW";
+  else if (color_equal(c, PURPLE)) return "PURPLE";
+  else if (color_equal(c, ORANGE)) return "ORANGE";
+  else if (color_equal(c, INVISIBLE)) return "INVISIBLE";
+  else return "UNKNOWN";
+}
+
 inline Color uint_to_color(unsigned int i) {
   switch (i) {
   case 0:
@@ -45,6 +60,8 @@ inline Color uint_to_color(unsigned int i) {
     return PURPLE;
   case 4:
     return ORANGE;
+  case 5:
+    return INVISIBLE;
   }
   return BLACK;
 }
@@ -60,7 +77,9 @@ inline unsigned int color_to_uint(Color c) {
     return 3;
   else if (color_equal(c, ORANGE))
     return 4;
+  else if (color_equal(c, INVISIBLE))
   return 5;
+  return 6;
 }
 
 struct ColorCompare {
@@ -124,6 +143,37 @@ inline void split(std::string str, std::string splitBy,
     tokens.push_back(
         frag.substr(splitAt + splitLen, frag.size() - (splitAt + splitLen)));
   }
+}
+
+inline int random_int(int min, int max) {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<> dis(min, max);
+  return dis(gen);
+}
+
+inline std::string sanitize_username(std::string str) {
+  // Remove non-alphabetic characters
+  str.erase(std::remove_if(str.begin(), str.end(),
+                           [](unsigned char c) { return !std::isalpha(c); }),
+            str.end());
+  // Convert to lowercase
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  return str;
+}
+
+template <typename T>
+T random_enum_element(T first, T last) {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<> dis(static_cast<int>(first), static_cast<int>(last));
+  return static_cast<T>(dis(gen));
+}
+
+void DrawTextureAlpha(Texture2D texture, int x, int y, unsigned char alpha) {
+  Color tint = (Color){255, 255, 255, alpha};
+  DrawTexture(texture, x, y, tint);
 }
 
 #endif

@@ -32,6 +32,17 @@ std::mutex packets_mutex;
 std::list<std::string> packets = {};
 
 std::atomic<bool> running = true;
+std::string network_buffer = "";
+Color my_true_color = RED;
+
+// assassin event tracking
+int my_target_id = -1;
+bool is_assassin = false;
+
+// assassin proximity audio
+static Sound assassin_sound;
+static bool assassin_sound_loaded = false;
+static bool assassin_nearby = false;
 
 void do_recv() {
   char buffer[1024];
@@ -49,12 +60,25 @@ void do_recv() {
       break;
     }
 
-    std::lock_guard<std::mutex> lock(packets_mutex);
-    std::string packet(buffer, bytes);
+    network_buffer.append(buffer, bytes);
 
-    packets.push_back(packet);
+    size_t separator_pos;
+    while ((separator_pos = network_buffer.find(';')) != std::string::npos) {
+      std::string packet = network_buffer.substr(0, separator_pos);
+      network_buffer.erase(0, separator_pos + 1);
+
+      if (!packet.empty()) {
+        std::lock_guard<std::mutex> lock(packets_mutex);
+        packets.push_back(packet);
+      }
+    }
   }
 }
+
+enum EventType {
+  Darkness = 0,
+  Assasin = 1
+};
 
 void handle_packet(int packet_type, std::string payload, Game *game,
                    int *my_id) {
@@ -63,7 +87,7 @@ void handle_packet(int packet_type, std::string payload, Game *game,
 
   switch (packet_type) {
   case MSG_GAME_STATE:
-    // remove trailing semicolon if present
+    std::cout << "Received game state: " << payload << std::endl;
     if (!payload.empty() && payload.back() == ';') {
       payload.pop_back();
     }
@@ -72,11 +96,10 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       if (i == std::string(""))
         continue;
 
-      // split each player entry by spaces
       std::vector<std::string> player_parts;
       split(i, std::string(" "), player_parts);
 
-      if (player_parts.size() < 5) {
+      if (player_parts.size() != 6) {
         std::cerr << "Invalid player data: " << i << std::endl;
         continue;
       }
@@ -85,20 +108,14 @@ void handle_packet(int packet_type, std::string payload, Game *game,
         int id = std::stoi(player_parts[0]);
         int x = std::stoi(player_parts[1]);
         int y = std::stoi(player_parts[2]);
-        // join all fields between index 3 and last-1 as the username
-        std::string username;
-        for (size_t j = 3; j + 1 < player_parts.size(); ++j) {
-          if (!username.empty())
-            username += " ";
-          username += player_parts[j];
-        }
-        // the color should be the last element
-        unsigned int color_code =
-            (unsigned int)std::stoi(player_parts[player_parts.size() - 1]);
+        std::string username = player_parts[3];
+        unsigned int color_code = (unsigned int)std::stoi(player_parts[4]);
+        int weapon_id = std::stoi(player_parts[5]);
 
         (*game).players[id] = Player(x, y);
         (*game).players[id].username = username;
         (*game).players[id].color = uint_to_color(color_code);
+        (*game).players[id].weapon_id = weapon_id;
 
         std::cout << "Player " << id << " color code: " << color_code
                   << std::endl;
@@ -121,6 +138,10 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       break;
 
     if ((*game).players.find(id) != (*game).players.end()) {
+      if (color_equal((*game).players.at(id).color, INVISIBLE) && id != *my_id) {
+        // std::cout << "Client " << *my_id << ": Assassin " << id << " moved to (" << x << ", " << y << ") with rotation " << rot << std::endl;
+      }
+      
       (*game).players.at(id).nx = x;
       (*game).players.at(id).ny = y;
       (*game).players.at(id).rot = rot;
@@ -128,44 +149,64 @@ void handle_packet(int packet_type, std::string payload, Game *game,
 
   } break;
   case MSG_PLAYER_NEW:
+    std::cout << "Received player new: " << payload << std::endl;
     split(payload, " ", msg_split);
+    if (msg_split.size() != 6) {
+      std::cerr << "Invalid MSG_PLAYER_NEW packet: " << payload << std::endl;
+      break;
+    }
     {
       int id = std::stoi(msg_split.at(0));
       int x = std::stoi(msg_split.at(1));
       int y = std::stoi(msg_split.at(2));
       std::string username = msg_split.at(3);
+      unsigned int color_code = (unsigned int)std::stoi(msg_split.at(4));
+      int weapon_id = std::stoi(msg_split.at(5));
 
       (*game).players[id] = Player(x, y);
       (*game).players[id].username = username;
-      (*game).players[id].color = uint_to_color(std::stoi(msg_split.at(4)));
+      (*game).players[id].color = uint_to_color(color_code);
+      (*game).players[id].weapon_id = weapon_id;
     }
-
     break;
   case MSG_PLAYER_LEFT:
     if ((*game).players.find(std::stoi(payload)) != (*game).players.end())
       (*game).players.erase(std::stoi(payload));
     break;
-  case MSG_PLAYER_NAME: {
-    split(payload, std::string(" "), msg_split);
-    if (msg_split.size() >= 2) {
-      // Reconstruct username from all parts after the player ID
-      std::string username;
-      for (size_t j = 1; j < msg_split.size(); ++j) {
-        if (!username.empty())
-          username += " ";
-        username += msg_split[j];
-      }
-      (*game).players.at(std::stoi(msg_split[0])).username = username;
-      std::cout << "Received username for player " << msg_split[0] << ": '" << username << "'" << std::endl;
+  case MSG_PLAYER_UPDATE: {
+    std::istringstream iss(payload);
+    int id;
+    std::string username;
+    unsigned int color_code;
+    iss >> id >> username >> color_code;
+
+    if (iss.fail()) {
+      std::cerr << "Invalid MSG_PLAYER_UPDATE packet: " << payload << std::endl;
+      break;
     }
-  } break;
-  case MSG_PLAYER_COLOR: {
-    split(payload, std::string(" "), msg_split);
-    if ((*game).players.find(std::stoi(msg_split[0])) !=
-        (*game).players.end()) {
-      unsigned int color_code = std::stoi(msg_split[1]);
-      (*game).players.at(std::stoi(msg_split[0])).color =
-          uint_to_color(color_code);
+
+    if (game->players.count(id)) {
+      Color old_color = game->players.at(id).color;
+      game->players.at(id).username = username;
+      Color new_color = uint_to_color(color_code);
+      game->players.at(id).color = new_color;
+
+      std::cout << "Player " << id << " color changed from " << color_to_string(old_color) << " to " << color_to_string(new_color) << std::endl;
+
+      // only update true color for local player when not invisible
+      if (id == *my_id && !color_equal(new_color, INVISIBLE)) {
+        Color old_true_color = my_true_color;
+        my_true_color = new_color;
+        
+        std::cout << "Client: Local player true color changed from " << color_to_string(old_true_color) << " to " << color_to_string(my_true_color) << std::endl;
+        
+        // reset assassin state when visible again
+        if (is_assassin) {
+          is_assassin = false;
+          my_target_id = -1;
+          std::cout << "Assassin event ended - you are visible again." << std::endl;
+        }
+      }
     }
   } break;
   case MSG_BULLET_SHOT: {
@@ -174,9 +215,6 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     float rot;
 
     j >> from_id >> x >> y >> rot;
-
-    // if (from_id == *my_id)
-    //   break;
 
     float angleRad = (-rot + 5) * DEG2RAD;
     float bspeed = 10;
@@ -193,6 +231,29 @@ void handle_packet(int packet_type, std::string payload, Game *game,
 
     break;
   }
+  case MSG_ASSASSIN_CHANGE: {
+    std::cout << "Received assassin change packet: " << payload << std::endl;
+    std::istringstream assassin_stream(payload);
+    int assassin_id, target_id;
+    assassin_stream >> assassin_id >> target_id;
+    
+    if (assassin_stream.fail()) {
+      std::cerr << "Invalid MSG_ASSASSIN_CHANGE packet: " << payload << std::endl;
+      break;
+    }
+    
+    std::cout << "Assassin event: Player " << assassin_id << " is targeting player " << target_id << std::endl;
+
+    if (assassin_id == *my_id) {
+      game->players[assassin_id].color = INVISIBLE;
+      is_assassin = true;
+      my_target_id = target_id;
+      
+      std::cout << "Client: You are now the assassin! Your target is player ID: " << target_id << std::endl;
+    }
+    
+    break;
+  }
   }
 }
 
@@ -200,15 +261,27 @@ void handle_packets(Game *game, int *my_id) {
   std::lock_guard<std::mutex> lock(packets_mutex);
   while (!packets.empty()) {
     std::string packet = packets.front();
+    packets.pop_front();
 
-    int packet_type = std::stoi(packet.substr(0, packet.find('\n')));
-    std::string payload =
-        packet.substr(packet.find('\n') + 1, packet.find_first_of(';') - 2);
+    size_t newline_pos = packet.find('\n');
+    if (newline_pos == std::string::npos) {
+      std::cerr << "Malformed packet (no newline): " << packet << std::endl;
+      continue;
+    }
+
+    int packet_type = std::stoi(packet.substr(0, newline_pos));
+    std::string payload = packet.substr(newline_pos + 1);
 
     handle_packet(packet_type, payload, game, my_id);
-
-    packets.pop_front();
   }
+}
+
+bool acceptable_username(std::string username) {
+  return username.length() > 0 && username.length() <= 10 &&
+         std::all_of(username.begin(), username.end(), [](char c) {
+           return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9');
+         }); // only allow alphanumeric characters
 }
 
 void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
@@ -263,20 +336,28 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
 
   EndUiDrawing();
 
-  if (k != 0 && k != '\n' && k != ':' && k != ' ' && k != ';' &&
-      (*usernameprompt).length() < 10) {
+  if (acceptable_username(std::string(1, k)) && (*usernameprompt).length() < 10) {
     (*usernameprompt).push_back(k);
   }
   if (IsKeyPressed(KEY_BACKSPACE) && !(*usernameprompt).empty())
     (*usernameprompt).pop_back();
 
   if (IsKeyPressed(KEY_ENTER) && !(*usernameprompt).empty() && my_id != -1) {
-    *usernamechosen = true;
-    game_conf->username = *usernameprompt;
-    game_conf->colorindex = *mycolor;
-    send_message(std::string("5\n").append(*usernameprompt), sock);
-    send_message("6\n" + std::to_string(color_to_uint(options[*mycolor])),
-                 sock);
+    if (acceptable_username(*usernameprompt)) {
+      *usernamechosen = true;
+      game_conf->username = *usernameprompt;
+      game_conf->colorindex = *mycolor;
+      my_true_color = options[*mycolor];
+
+      std::cout << "Client: Selected color index: " << *mycolor << std::endl;
+      std::cout << "Client: Selected color: " << color_to_string(options[*mycolor]) << std::endl;
+      
+      std::cout << "Client: Color code being sent: " << color_to_uint(options[*mycolor]) << std::endl;
+
+      std::string payload =
+          *usernameprompt + " " + std::to_string(color_to_uint(options[*mycolor]));
+      send_message(std::string("5\n").append(payload), sock);
+    }
   }
 
   if (IsKeyPressed(KEY_LEFT))
@@ -306,11 +387,26 @@ void manage_username_prompt(playermap *players, int my_id, Color options[5],
   }
 }
 
-void draw_ui(Color mycolor, playermap players, std::vector<Bullet> bullets,
-             int my_id, int shoot_cooldown, Camera2D cam, float scale) {
+void draw_ui(Color my_ui_color, playermap players,
+             std::vector<Bullet> bullets, int my_id, int shoot_cooldown,
+             Camera2D cam, float scale) {
   BeginUiDrawing();
 
   DrawFPS(0, 0);
+
+  if (is_assassin && my_target_id != -1) {
+    // draw assassin status box at top center
+    DrawRectangle(300, 10, 200, 60, DARKGRAY);
+    DrawText("ASSASSIN MODE", 320, 20, 16, RED);
+    DrawText("Target:", 330, 35, 12, WHITE);
+    if (my_target_id == my_id) {
+      DrawText("Pending...", 330, 50, 12, YELLOW);
+    } else if (players.count(my_target_id)) {
+      DrawText(players[my_target_id].username.c_str(), 330, 50, 12, players[my_target_id].color);
+    } else {
+      DrawText("Unknown", 330, 50, 12, RED);
+    }
+  }
 
   // Base dimensions for UI elements
   float boxHeight = 50;
@@ -334,7 +430,7 @@ void draw_ui(Color mycolor, playermap players, std::vector<Bullet> bullets,
 
   // player info
   DrawRectangle(padding, y + (boxHeight - squareSize) / 2, squareSize,
-                squareSize, mycolor);
+                squareSize, my_ui_color);
   DrawText(players[my_id].username.c_str(), textPadding,
            y + (boxHeight - textSize) / 2, textSize, WHITE);
 
@@ -348,9 +444,14 @@ void draw_ui(Color mycolor, playermap players, std::vector<Bullet> bullets,
   // minimap
   DrawRectangle(window_size.x - 100, 0, 100, 100, GRAY);
 
-  for (auto &[_, p] : players) {
-    DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
-                  p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
+  for (auto &[id, p] : players) {
+    if (id == my_id) {
+      DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                    p.y / (PLAYING_AREA.height / 100), 10, 10, my_ui_color);
+    } else if (!color_equal(p.color, INVISIBLE)) {
+      DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                    p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
+    }
   }
 
   for (Bullet b : bullets)
@@ -361,23 +462,89 @@ void draw_ui(Color mycolor, playermap players, std::vector<Bullet> bullets,
   EndUiDrawing();
 }
 
-void draw_players(playermap players, ResourceManager *res_man) {
+void draw_players(playermap players, ResourceManager *res_man, int my_id) {
   for (auto &[id, p] : players) {
+    // Only skip unset players and invisible players that aren't the local player and aren't visible due to range
     if (p.username == "unset")
       continue;
-    Color clr = p.color;
-    DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
+      
+    if (!color_equal(p.color, INVISIBLE) || id == my_id) {
+      Color clr = p.color;
+      if (id == my_id && is_assassin) {
+        DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
+      } else if (id == my_id && color_equal(p.color, INVISIBLE)) {
+        // draw with transparency using the original color
+        DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
+      } else {
+        DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
+      }
 
-    DrawText(p.username.c_str(),
-             p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
-             BLACK);
+      DrawText(p.username.c_str(),
+               p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
+               BLACK);
+    }
 
-    DrawRectanglePro({(float)p.x + 50, (float)p.y + 50, 50, 20},
-                     {(float)100, (float)0}, p.rot, BLACK);
+    // weapon
+    if (id == my_id && is_assassin) {
+      Vector2 player_center = {(float)p.x + 50, (float)p.y + 50};
+      float knife_offset = 80.0f;
+      
+      DrawTexturePro(res_man->getTex("assets/assassin_knife.png"), 
+                     {(float)0, (float)0, 16, 16},
+                     {player_center.x, player_center.y, 80, 80}, 
+                     {(float)40 + knife_offset, (float)40}, 
+                     p.rot, WHITE);
+    } else if (color_equal(p.color, INVISIBLE) && id != my_id) {
+      if (players.count(my_id)) {
+        float distance = sqrtf(powf(p.x - players[my_id].x, 2) + powf(p.y - players[my_id].y, 2));
+        float close_distance = 200.0f; 
+        
+        if (distance <= close_distance) {
+          Vector2 player_center = {(float)p.x + 50, (float)p.y + 50};
+          float knife_offset = 80.0f;
+          
+          // Calculate alpha based on distance - more transparent when further away
+          float alpha_scale = 1.0f - (distance / close_distance);
+          unsigned char alpha = (unsigned char)(alpha_scale * 192);
+          Color knife_tint = {255, 255, 255, alpha};
+          
+          DrawTexturePro(res_man->getTex("assets/assassin_knife.png"), 
+                         {(float)0, (float)0, 16, 16}, 
+                         {player_center.x, player_center.y, 80, 80}, 
+                         {(float)40 + knife_offset, (float)40}, 
+                         p.rot, knife_tint);
+          // play sound when close
+          if (!assassin_sound_loaded) {
+            assassin_sound = LoadSound("assets/assassin_close.wav");
+            assassin_sound_loaded = true;
+          }
+          
+          float volume = 1.0f - (distance / close_distance);
+          volume = volume * 0.5f;
+          SetSoundVolume(assassin_sound, volume);
+          
+          // start or continue looping
+          if (!IsSoundPlaying(assassin_sound)) {
+            PlaySound(assassin_sound);
+          }
+          assassin_nearby = true;
+        } else {
+          // assassin moved away, stop the sound
+          if (assassin_nearby && IsSoundPlaying(assassin_sound)) {
+            StopSound(assassin_sound);
+          }
+          assassin_nearby = false;
+        }
+      }
+    } else {
+      // gun/barrel/thing
+      DrawRectanglePro({(float)p.x + 50, (float)p.y + 50, 50, 20},
+                       {(float)100, (float)0}, p.rot, BLACK);
+    }
   }
 }
 
-bool move_gun(float *rot, int cx, int cy, Camera2D cam, float scale,
+bool move_wpn(float *rot, int cx, int cy, Camera2D cam, float scale,
               float offsetX, float offsetY) {
   // mouse position in window
   Vector2 windowMouse = GetMousePosition();
@@ -398,12 +565,10 @@ bool move_gun(float *rot, int cx, int cy, Camera2D cam, float scale,
 }
 
 void move_camera(Camera2D *cam, int cx, int cy) {
-  // Center the camera on the player
+  // center the camera on the player
   cam->target = (Vector2){(float)cx + 50, (float)cy + 50};
   
-  // Constrain camera to playing field boundaries
-  // Use the render texture dimensions (window_size) for boundary calculations
-  // since that's what the game world is rendered to
+  // constrain camera to playing field boundaries
   float viewWidth = window_size.x / cam->zoom;
   float viewHeight = window_size.y / cam->zoom;
   
@@ -498,7 +663,7 @@ int main() {
     float offsetX = (GetScreenWidth() - scaledWidth) * 0.5f;
     float offsetY = (GetScreenHeight() - scaledHeight) * 0.5f;
 
-    bool moved_gun = move_gun(&game.players[my_id].rot, cx, cy, cam, scale,
+    bool moved_gun = move_wpn(&game.players[my_id].rot, cx, cy, cam, scale,
                               offsetX, offsetY);
 
     hasmoved = moved || moved_gun;
@@ -521,7 +686,7 @@ int main() {
       canshoot = true;
     }
 
-    if (IsMouseButtonDown(0) && canshoot) {
+    if (IsMouseButtonDown(0) && canshoot && game.players[my_id].weapon_id == 0 && !is_assassin) {
       canshoot = false;
       bdelay = 20;
       float bspeed = 10;
@@ -555,15 +720,15 @@ int main() {
       }
     }
 
-    draw_players(game.players, &res_man);
+    draw_players(game.players, &res_man, my_id);
 
     for (Bullet &b : game.bullets)
       b.show();
 
     EndMode2D();
 
-    // Draw HUD after EndMode2D but still in render texture
-    draw_ui(options[g_conf.colorindex], game.players, game.bullets, my_id,
+    // HUD
+    draw_ui(my_true_color, game.players, game.bullets, my_id,
             bdelay, cam, scale);
 
     EndTextureMode();
