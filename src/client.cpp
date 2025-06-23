@@ -38,7 +38,6 @@ Color my_true_color = RED;
 // assassin event tracking
 int my_target_id = -1;
 bool is_assassin = false;
-std::string target_username = "";
 
 // assassin proximity audio
 static Sound assassin_sound;
@@ -205,7 +204,6 @@ void handle_packet(int packet_type, std::string payload, Game *game,
         if (is_assassin) {
           is_assassin = false;
           my_target_id = -1;
-          target_username = "";
           std::cout << "Assassin event ended - you are visible again." << std::endl;
         }
       }
@@ -251,15 +249,7 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       is_assassin = true;
       my_target_id = target_id;
       
-      // Get the target's username if they exist in the game
-      if (game->players.count(target_id)) {
-        std::cout << "Client: Target username: " << game->players[target_id].username << std::endl;
-        target_username = game->players[target_id].username;
-      } else {
-        target_username = "Unknown";
-      }
-      
-      std::cout << "Client: You are now the assassin! Your target is: " << target_username << std::endl;
+      std::cout << "Client: You are now the assassin! Your target is player ID: " << target_id << std::endl;
     }
     
     break;
@@ -409,10 +399,12 @@ void draw_ui(Color my_ui_color, playermap players,
     DrawRectangle(300, 10, 200, 60, DARKGRAY);
     DrawText("ASSASSIN MODE", 320, 20, 16, RED);
     DrawText("Target:", 330, 35, 12, WHITE);
-    if (target_username == players[my_target_id].username) {
-      DrawText("loading...", 330, 50, 12, YELLOW);
+    if (my_target_id == my_id) {
+      DrawText("Pending...", 330, 50, 12, YELLOW);
+    } else if (players.count(my_target_id)) {
+      DrawText(players[my_target_id].username.c_str(), 330, 50, 12, players[my_target_id].color);
     } else {
-      DrawText(target_username.c_str(), 330, 50, 12, WHITE);
+      DrawText("Unknown", 330, 50, 12, RED);
     }
   }
 

@@ -301,7 +301,7 @@ bool check_assassin_collision(int assassin_id, int target_id, int assassin_x, in
   // target center position
   float target_center_x = target.x + 50;
   float target_center_y = target.y + 50;
-  float hitbox_radius = 50.0f; 
+  float hitbox_radius = 100.0f; 
   
   float distance = sqrtf(powf(knife_x - target_center_x, 2) + powf(knife_y - target_center_y, 2));
   
