@@ -88,18 +88,8 @@ void perform_shutdown() {
 }
 
 void shutdown_server(int signum) {
-  std::cout << "\nSignal " << signum << " received. Shutting down." << std::endl;
+  std::cout << "\nSignal " << signum << " received. Starting shutdown..." << std::endl;
   server_running = false;
-  
-  std::thread shutdown_thread(perform_shutdown);
-  shutdown_thread.detach();
-  
-  std::thread force_exit([]() {
-    std::this_thread::sleep_for(std::chrono::seconds(5));
-    std::cout << "Force exit after timeout" << std::endl;
-    _Exit(1);
-  });
-  force_exit.detach();
 }
 
 void handle_client(int client, int id) {
@@ -289,9 +279,7 @@ enum EventType {
 };
 
 void make_player_assassin(int target_id) {
-  // Always acquire locks in the same order: game_mutex first, then assassin_mutex
-  std::lock_guard<std::mutex> game_lock(game_mutex);
-  std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
+  std::scoped_lock all_locks(game_mutex, assassin_mutex, clients_mutex);
   
   if (assassin_id != -1) {
     std::cout << "Command failed: An assassin event is already active."
@@ -337,11 +325,10 @@ void make_player_assassin(int target_id) {
     int random_index = random_int(0, potential_targets.size() - 1);
     assassin_target_id = potential_targets[random_index];
     
-    // send assassin event message to the assassin FIRST
+    // send assassin event message to the assassin
     std::ostringstream event_response;
     event_response << "15\n" << target_id << " " << assassin_target_id;
     
-    std::lock_guard<std::mutex> clients_lock(clients_mutex);
     auto assassin_client = clients.find(target_id);
     if (assassin_client != clients.end()) {
       send_message(event_response.str(), assassin_client->second.first);
@@ -354,7 +341,7 @@ void make_player_assassin(int target_id) {
     std::cout << "No potential targets found for assassin " << target_id << std::endl;
   }
 
-  // THEN send the color change message
+  // send the color change message
   std::ostringstream response;
   response << "5\n" // MSG_PLAYER_UPDATE
            << target_id << " " << game.players.at(target_id).username << " "
@@ -528,7 +515,7 @@ int main() {
 
   std::cout << "Running.\n";
 
-  std::signal(SIGINT, shutdown_server); // handle SIGINT
+  std::signal(SIGINT, shutdown_server);
 
   while (server_running) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -547,7 +534,9 @@ int main() {
     }
 
     if (!to_remove.empty()) {
-      std::lock_guard<std::mutex> a(clients_mutex);
+      // Use scoped_lock to acquire all mutexes atomically in a consistent order
+      std::scoped_lock all_locks(clients_mutex, game_mutex, running_mutex);
+      
       for (int i : to_remove) {
         try {
           auto client_it = clients.find(i);
@@ -559,33 +548,30 @@ int main() {
           auto thread_ptr = client_it->second.second;
           
           if (thread_ptr && thread_ptr->joinable()) {
+            // First shutdown the socket to interrupt any blocking operations
+            if (socket_fd != -1) {
+              shutdown(socket_fd, SHUT_RDWR);
+            }
+            // Then join the thread
             thread_ptr->join();
-          }
-
-          if (socket_fd != -1) {
-            shutdown(socket_fd, SHUT_RDWR);
-            close(socket_fd);
+            // Finally close the socket
+            if (socket_fd != -1) {
+              close(socket_fd);
+            }
           }
 
           clients.erase(client_it);
+          game.players.erase(i);
+          is_running.erase(i);
 
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+          // notify other clients about disconnection
           std::string out("4\n" + std::to_string(i));
           for (const auto& [client_id, client_data] : clients) {
             if (client_id != i && client_data.first != -1) {
               send_message(out, client_data.first);
             }
-          }
-
-          {
-            std::lock_guard<std::mutex> b(game_mutex);
-            game.players.erase(i);
-          }
-
-          {
-            std::lock_guard<std::mutex> running_lock(running_mutex);
-            is_running.erase(i);
           }
 
           std::cout << "Removed client " << i << std::endl;
@@ -740,7 +726,53 @@ int main() {
     }
   }
 
-  // Wait a bit for threads to notice server_running is false
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  return 0;
+  std::cout << "Main loop stopped. Starting cleanup..." << std::endl;
+
+  // force exit after 5 seconds
+  std::thread force_exit([]() {
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    std::cout << "Force exit after timeout" << std::endl;
+    _Exit(1);
+  });
+  force_exit.detach();
+
+  try {
+    // Use scoped_lock to acquire all mutexes atomically in a consistent order
+    std::scoped_lock all_locks(packets_mutex, clients_mutex, game_mutex, running_mutex);
+
+    // clear pending packets
+    packets.clear();
+
+    // close sock
+    if (server_socket_fd != -1) {
+      std::cout << "Closing server socket..." << std::endl;
+      shutdown(server_socket_fd, SHUT_RDWR);
+      close(server_socket_fd);
+    }
+
+    // terminate clients
+    for (auto& [id, client_pair] : clients) {
+      if (client_pair.second && client_pair.second->joinable()) {
+        // First shutdown the socket to interrupt any blocking operations
+        if (client_pair.first != -1) {
+          shutdown(client_pair.first, SHUT_RDWR);
+        }
+        // Then join the thread
+        client_pair.second->join();
+        // Finally close the socket
+        if (client_pair.first != -1) {
+          close(client_pair.first);
+        }
+      }
+    }
+    clients.clear();
+    game.players.clear();
+    is_running.clear();
+
+    std::cout << "Cleanup complete. Exiting..." << std::endl;
+    exit(0);
+  } catch (const std::exception& e) {
+    std::cerr << "Error during cleanup: " << e.what() << std::endl;
+    exit(1);
+  }
 }
