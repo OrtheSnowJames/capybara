@@ -35,10 +35,10 @@ Game game;
 
 std::mutex assassin_mutex;
 int assassin_id = -1;
-int assassin_target_id = -1; // Track the current target
+int assassin_target_id = -1; // target id
 Color original_assassin_color;
 std::chrono::steady_clock::time_point assassin_start_time;
-std::set<int> used_assassin_ids; // Track players who have already been assassins
+std::set<int> used_assassin_ids; // used id(s)
 
 typedef std::list<std::pair<int, std::string>> packetlist;
 
@@ -51,7 +51,33 @@ std::unordered_map<int, client> clients;
 std::mutex running_mutex;
 std::map<int, bool> is_running;
 
-int last_assassin_id = -1;  // Track the previous assassin
+int last_assassin_id = -1;  // previous assassin id
+
+std::mutex pending_assassin_mutex;
+std::map<int, std::chrono::steady_clock::time_point> pending_assassins;
+
+std::set<int> previous_targets;  // previous targets
+
+// Lock order: game_mutex -> assassin_mutex -> pending_assassin_mutex -> clients_mutex
+// This order must be maintained in all functions to prevent deadlocks
+
+void clear_assassin_state() {
+  std::scoped_lock all_locks(game_mutex, assassin_mutex, pending_assassin_mutex, clients_mutex);
+  std::cout << "Clearing assassin state" << std::endl;
+  
+  // reset assassin IDs
+  assassin_id = -1;
+  assassin_target_id = -1;
+    
+  // clear pending assassins
+  pending_assassins.clear();
+    
+  // clear previous targets
+  previous_targets.clear();
+    
+  // reset assassin start time
+  assassin_start_time = std::chrono::steady_clock::now();
+}
 
 void perform_shutdown() {
   // try to exit gracefully
@@ -106,7 +132,6 @@ void handle_client(int client, int id) {
 
     std::ostringstream out;
     {
-      // Use scoped_lock to acquire both mutexes atomically
       std::scoped_lock lock(game_mutex, assassin_mutex);
 
       for (auto &[k, v] : game.players) {
@@ -143,7 +168,7 @@ void handle_client(int client, int id) {
 
   std::cout << "Client " << msg_id << " has joined.\n";
 
-  // If there's an active assassin, send the assassin event message to the new client
+  // if there's an active assassin, send the assassin event message to the new client
   {
     std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
     if (assassin_id != -1 && assassin_target_id != -1) {
@@ -221,8 +246,16 @@ void handle_client(int client, int id) {
     std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
     if (id == assassin_id) {
       std::cout << "Assassin (ID: " << id << ") disconnected. Ending assassin event." << std::endl;
-      assassin_id = -1;
-      assassin_target_id = -1;
+      if (game.players.count(id)) {
+        game.players.at(id).color = original_assassin_color;
+        std::ostringstream response;
+        response << "5\n" // MSG_PLAYER_UPDATE
+                 << id << " "
+                 << game.players.at(id).username << " "
+                 << color_to_uint(original_assassin_color);
+        broadcast_message(response.str(), clients);
+      }
+      clear_assassin_state();
     }
   }
 
@@ -243,13 +276,15 @@ float normalize_rotation(float rot) {
 //  EVENTS
 // ---------------------------------
 
-// Check if assassin's knife is touching their target
 bool check_assassin_collision(int assassin_id, int target_id, int assassin_x, int assassin_y, float assassin_rot) {
   if (assassin_id == -1 || target_id == -1) return false;
+  
+  // don't allow hitting self during pending period
+  if (assassin_id == target_id) return false;
 
   assassin_rot = normalize_rotation(assassin_rot + 180.0f);
 
-  // check if both players exist
+  // null check
   if (game.players.find(assassin_id) == game.players.end() || 
       game.players.find(target_id) == game.players.end()) {
     return false;
@@ -257,11 +292,9 @@ bool check_assassin_collision(int assassin_id, int target_id, int assassin_x, in
   
   Player& target = game.players[target_id];
   
-  // calculate knife position using same approach as client
   float knife_offset = 80.0f;
   float angle_rad = assassin_rot * DEG2RAD;
   
-  // knife position extending from assassin center toward cursor direction
   float knife_x = assassin_x + 50 + cosf(angle_rad) * knife_offset;
   float knife_y = assassin_y + 50 + sinf(angle_rad) * knife_offset;
   
@@ -280,60 +313,59 @@ enum EventType {
   Assasin = 1
 };
 
-void select_new_target(int assassin_id) {
-  std::scoped_lock all_locks(game_mutex, assassin_mutex, clients_mutex);
-  
-  // find a random target for the assassin
-  std::vector<int> potential_targets;
-  for (const auto& [player_id, player] : game.players) {
-    // don't target the assassin or the previous target
-    if (player_id != assassin_id && 
-        player_id != assassin_target_id && 
-        !color_equal(player.color, INVISIBLE)) {
-      potential_targets.push_back(player_id);
-    }
-  }
-  
-  if (!potential_targets.empty()) {
-    int random_index = random_int(0, potential_targets.size() - 1);
-    int new_target_id = potential_targets[random_index];
-    assassin_target_id = new_target_id;
-    
-    // send assassin event message to the assassin
-    std::ostringstream event_response;
-    event_response << "15\n" << assassin_id << " " << assassin_target_id;
-    
-    auto assassin_client = clients.find(assassin_id);
-    if (assassin_client != clients.end()) {
-      send_message(event_response.str(), assassin_client->second.first);
+void select_new_target(int assassin_id, bool is_initial_target) {
+    std::vector<int> potential_targets;
+    for (const auto& [player_id, player] : game.players) {
+        // don't target:
+        // - the assassin themselves
+        // - invisible players
+        // - previously targeted players (unless we've targeted everyone)
+        if (player_id != assassin_id && 
+            !color_equal(player.color, INVISIBLE) &&
+            (previous_targets.find(player_id) == previous_targets.end() || previous_targets.size() >= game.players.size() - 1)) {
+            potential_targets.push_back(player_id);
+        }
     }
     
-    std::cout << "Assassin " << assassin_id << " has a new target: " << assassin_target_id << std::endl;
-  } else {
-    std::cout << "No more targets available for assassin " << assassin_id << std::endl;
-    // End assassin event since no more targets
-    if (game.players.count(assassin_id)) {
-      game.players.at(assassin_id).color = original_assassin_color;
-      
-      std::ostringstream response;
-      response << "5\n" // MSG_PLAYER_UPDATE
-               << assassin_id << " "
-               << game.players.at(assassin_id).username << " "
-               << color_to_uint(original_assassin_color);
-      
-      broadcast_message(response.str(), clients);
+    if (!potential_targets.empty()) {
+        if (previous_targets.size() >= game.players.size() - 1) {
+            previous_targets.clear();
+        }
+        
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, potential_targets.size() - 1);
+        int random_index = dis(gen);
+        int new_target_id = potential_targets[random_index];
+        
+        // add to previous targets
+        if (!is_initial_target) {
+            previous_targets.insert(new_target_id);
+        }
+        
+        assassin_target_id = new_target_id;
+        
+        // send assassin event message
+        std::ostringstream event_response;
+        event_response << "15\n" << assassin_id << " " << assassin_target_id;
+        
+        auto assassin_client = clients.find(assassin_id);
+        if (assassin_client != clients.end()) {
+            send_message(event_response.str(), assassin_client->second.first);
+            if (is_initial_target) {
+                std::cout << "New assassin " << assassin_id << " assigned initial target " << assassin_target_id << std::endl;
+            } else {
+                std::cout << "Assassin " << assassin_id << " assigned new target " << assassin_target_id << " after pending" << std::endl;
+            }
+        }
     }
-    assassin_id = -1;
-    assassin_target_id = -1;
-  }
 }
 
 void make_player_assassin(int target_id) {
-  std::scoped_lock all_locks(game_mutex, assassin_mutex, clients_mutex);
+  std::scoped_lock all_locks(game_mutex, assassin_mutex, pending_assassin_mutex, clients_mutex);
   
   if (assassin_id != -1) {
-    std::cout << "Command failed: An assassin event is already active."
-              << std::endl;
+    std::cout << "Command failed: An assassin event is already active." << std::endl;
     return;
   }
 
@@ -343,7 +375,7 @@ void make_player_assassin(int target_id) {
     return;
   }
 
-  // Only prevent consecutive assassin roles
+  // prevent consecutive assassin roles
   if (target_id == last_assassin_id) {
     std::cout << "Player " << target_id << " was the last assassin. Skipping." << std::endl;
     return;
@@ -356,38 +388,15 @@ void make_player_assassin(int target_id) {
 
   std::cout << "Server: Storing original color for player " << target_id << " as " << color_to_string(original_assassin_color) << std::endl;
 
-  // make player invisible
+  // invis
   Color old_color = game.players.at(target_id).color;
   game.players.at(target_id).color = INVISIBLE;
   
   std::cout << "Server: Player " << target_id << " color changed from " << color_to_string(old_color) << " to INVISIBLE (assassin mode)" << std::endl;
 
-  // find a random target for the assassin
-  std::vector<int> potential_targets;
-  for (const auto& [player_id, player] : game.players) {
-    if (player_id != target_id && !color_equal(player.color, INVISIBLE)) {
-      potential_targets.push_back(player_id);
-    }
-  }
-  
-  if (!potential_targets.empty()) {
-    int random_index = random_int(0, potential_targets.size() - 1);
-    assassin_target_id = potential_targets[random_index];
-    
-    // send assassin event message to the assassin
-    std::ostringstream event_response;
-    event_response << "15\n" << target_id << " " << assassin_target_id;
-    
-    auto assassin_client = clients.find(target_id);
-    if (assassin_client != clients.end()) {
-      send_message(event_response.str(), assassin_client->second.first);
-    } else {
-      std::cout << "Warning: Could not find socket for assassin " << target_id << std::endl;
-    }
-    
-    std::cout << "Assassin " << target_id << " is targeting player " << assassin_target_id << std::endl;
-  } else {
-    std::cout << "No potential targets found for assassin " << target_id << std::endl;
+  // select new target
+  if (game.players.size() > 1) {
+    select_new_target(target_id, true);
   }
 
   // send the color change message
@@ -418,13 +427,12 @@ void summon_event(int delay) {
           break;
         }
         
-        // If all players have been assassins, reset the used list
         if (used_assassin_ids.size() >= game.players.size()) {
           std::cout << "All players have been assassins. Resetting assassin pool." << std::endl;
           used_assassin_ids.clear();
         }
         
-        // Find a player who hasn't been an assassin yet
+        // find a player who hasn't been an assassin yet
         std::vector<int> available_players;
         for (const auto& player : game.players) {
           if (used_assassin_ids.find(player.first) == used_assassin_ids.end()) {
@@ -462,6 +470,60 @@ void event_worker() {
     }
 }
 
+void check_pending_assassins() {
+  std::scoped_lock all_locks(game_mutex, assassin_mutex, pending_assassin_mutex, clients_mutex);
+  
+  // make sure under 1 min 
+  if (assassin_id != -1) {
+    auto current_time = std::chrono::steady_clock::now();
+    auto event_duration = std::chrono::duration_cast<std::chrono::seconds>(
+        current_time - assassin_start_time).count();
+        
+    if (event_duration >= 60) {
+      std::cout << "Assassin event timed out after 60 seconds" << std::endl;
+      if (game.players.count(assassin_id)) {
+        game.players.at(assassin_id).color = original_assassin_color;
+        
+        std::ostringstream response;
+        response << "5\n" // MSG_PLAYER_UPDATE
+                << assassin_id << " "
+                << game.players.at(assassin_id).username << " "
+                << color_to_uint(original_assassin_color);
+        
+        broadcast_message(response.str(), clients);
+      }
+      clear_assassin_state();
+      return;
+    }
+  }
+  
+  if (pending_assassins.empty()) {
+    return;
+  }
+  
+  std::vector<int> assassins_to_update;
+  auto current_time = std::chrono::steady_clock::now();
+  
+  // check which assassins need new targets
+  for (const auto& [assassin_id, start_time] : pending_assassins) {
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        current_time - start_time).count();
+        
+    if (elapsed >= 5) {
+      assassins_to_update.push_back(assassin_id);
+    }
+  }
+  
+  // remove and update assassins that finished pending
+  for (int assassin_id : assassins_to_update) {
+    pending_assassins.erase(assassin_id);
+   
+    if (game.players.size() > 1) {
+        select_new_target(assassin_id, false);
+    }
+  }
+}
+
 // ---------------------------------
 // END EVENTS
 // ---------------------------------
@@ -492,7 +554,7 @@ void accept_clients(int sock) {
     if (!server_running) break;
     
     if (client < 0) {
-      if (errno != EINTR) {  // Ignore interrupts
+      if (errno != EINTR) { 
         perror("Accept failed");
       }
       continue;
@@ -569,6 +631,9 @@ int main() {
   while (server_running) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
+    // check pending assassins
+    check_pending_assassins();
+
     // terminate disconnected clients
     std::list<int> to_remove;
     {
@@ -583,7 +648,6 @@ int main() {
     }
 
     if (!to_remove.empty()) {
-      // Use scoped_lock to acquire all mutexes atomically in a consistent order
       std::scoped_lock all_locks(clients_mutex, game_mutex, running_mutex);
       
       for (int i : to_remove) {
@@ -597,13 +661,12 @@ int main() {
           auto thread_ptr = client_it->second.second;
           
           if (thread_ptr && thread_ptr->joinable()) {
-            // First shutdown the socket to interrupt any blocking operations
             if (socket_fd != -1) {
               shutdown(socket_fd, SHUT_RDWR);
             }
-            // Then join the thread
+
             thread_ptr->join();
-            // Finally close the socket
+
             if (socket_fd != -1) {
               close(socket_fd);
             }
@@ -687,8 +750,23 @@ int main() {
                 std::cout << "ASSASSIN SUCCESS! Player " << current_assassin_id << " hit target " << current_target_id << std::endl;
                 // Store current assassin as last assassin
                 last_assassin_id = current_assassin_id;
-                // Select new target
-                select_new_target(current_assassin_id);
+                
+                // Set assassin to target themselves for 5 seconds
+                {
+                    std::scoped_lock locks(assassin_mutex, pending_assassin_mutex);
+                    assassin_target_id = current_assassin_id;  // Target self
+                    pending_assassins[current_assassin_id] = std::chrono::steady_clock::now();
+                    
+                    // Notify assassin of self-targeting
+                    std::ostringstream event_response;
+                    event_response << "15\n" << current_assassin_id << " " << current_assassin_id;
+                    
+                    auto assassin_client = clients.find(current_assassin_id);
+                    if (assassin_client != clients.end()) {
+                        send_message(event_response.str(), assassin_client->second.first);
+                        std::cout << "Assassin " << current_assassin_id << " entering pending period (self-target)" << std::endl;
+                    }
+                }
               }
               
               // Broadcast movement to other clients
@@ -789,10 +867,8 @@ int main() {
   force_exit.detach();
 
   try {
-    // Use scoped_lock to acquire all mutexes atomically in a consistent order
     std::scoped_lock all_locks(packets_mutex, clients_mutex, game_mutex, running_mutex);
 
-    // clear pending packets
     packets.clear();
 
     // close sock
@@ -805,18 +881,19 @@ int main() {
     // terminate clients
     for (auto& [id, client_pair] : clients) {
       if (client_pair.second && client_pair.second->joinable()) {
-        // First shutdown the socket to interrupt any blocking operations
         if (client_pair.first != -1) {
           shutdown(client_pair.first, SHUT_RDWR);
         }
-        // Then join the thread
+
         client_pair.second->join();
-        // Finally close the socket
+
         if (client_pair.first != -1) {
           close(client_pair.first);
         }
       }
     }
+
+    // clear data
     clients.clear();
     game.players.clear();
     is_running.clear();

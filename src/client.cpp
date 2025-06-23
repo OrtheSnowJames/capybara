@@ -253,13 +253,13 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       
       // Get the target's username if they exist in the game
       if (game->players.count(target_id)) {
+        std::cout << "Client: Target username: " << game->players[target_id].username << std::endl;
         target_username = game->players[target_id].username;
       } else {
         target_username = "Unknown";
       }
       
       std::cout << "Client: You are now the assassin! Your target is: " << target_username << std::endl;
-      std::cout << "Client: Assassin state changed from false to true" << std::endl;
     }
     
     break;
@@ -409,7 +409,11 @@ void draw_ui(Color my_ui_color, playermap players,
     DrawRectangle(300, 10, 200, 60, DARKGRAY);
     DrawText("ASSASSIN MODE", 320, 20, 16, RED);
     DrawText("Target:", 330, 35, 12, WHITE);
-    DrawText(target_username.c_str(), 330, 50, 12, YELLOW);
+    if (target_username == players[my_target_id].username) {
+      DrawText("loading...", 330, 50, 12, YELLOW);
+    } else {
+      DrawText(target_username.c_str(), 330, 50, 12, WHITE);
+    }
   }
 
   // Base dimensions for UI elements
@@ -475,7 +479,6 @@ void draw_players(playermap players, ResourceManager *res_man, int my_id) {
     if (!color_equal(p.color, INVISIBLE) || id == my_id) {
       Color clr = p.color;
       if (id == my_id && is_assassin) {
-        // Always use true color for local player when assassin (with transparency)
         DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
       } else if (id == my_id && color_equal(p.color, INVISIBLE)) {
         // draw with transparency using the original color
@@ -489,10 +492,10 @@ void draw_players(playermap players, ResourceManager *res_man, int my_id) {
                BLACK);
     }
 
-    // Draw weapon - knife for assassin, gun for others
+    // weapon
     if (id == my_id && is_assassin) {
       Vector2 player_center = {(float)p.x + 50, (float)p.y + 50};
-      float knife_offset = 80.0f; // distance from player center
+      float knife_offset = 80.0f;
       
       DrawTexturePro(res_man->getTex("assets/assassin_knife.png"), 
                      {(float)0, (float)0, 16, 16},
@@ -542,7 +545,7 @@ void draw_players(playermap players, ResourceManager *res_man, int my_id) {
         }
       }
     } else {
-      // Draw gun (normal rectangle)
+      // gun/barrel/thing
       DrawRectanglePro({(float)p.x + 50, (float)p.y + 50, 50, 20},
                        {(float)100, (float)0}, p.rot, BLACK);
     }
@@ -732,7 +735,7 @@ int main() {
 
     EndMode2D();
 
-    // Draw HUD after EndMode2D but still in render texture
+    // HUD
     draw_ui(my_true_color, game.players, game.bullets, my_id,
             bdelay, cam, scale);
 
