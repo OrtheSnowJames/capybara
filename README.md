@@ -40,4 +40,10 @@ bin/server
 ```sh
 # to connect to localhost:50000
 bin/client
+
+# to connect to 192.168.68.68:50000
+bin/client "192.168.68.68"
+
+# on windows powershell
+./game.exe "192.168.68.68"
 ```

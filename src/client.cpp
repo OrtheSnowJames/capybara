@@ -22,6 +22,24 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <chrono>
+#include <random>
+
+// Charging station constants and definitions
+const int CHARGE_SIZE = 64;
+const int CHARGE_OFFSET = 32;
+const int PLAYER_SIZE = 50;
+
+struct ChargingPoint {
+  int x, y;
+};
+
+ChargingPoint charging_points[4] = {
+  {CHARGE_OFFSET, (int)(PLAYING_AREA.height / 2) - CHARGE_OFFSET},
+  {(int)PLAYING_AREA.width - CHARGE_OFFSET - CHARGE_SIZE, (int)(PLAYING_AREA.height / 2) - CHARGE_OFFSET},
+  {(int)(PLAYING_AREA.width / 2) - CHARGE_OFFSET, CHARGE_OFFSET},
+  {(int)(PLAYING_AREA.width / 2) - CHARGE_OFFSET, (int)PLAYING_AREA.height - CHARGE_OFFSET - CHARGE_SIZE} 
+};
 
 // Remove global socket declaration - will be created in main()
 int sock = -1; // Will be initialized in main()
@@ -41,6 +59,16 @@ bool is_assassin = false;
 static Sound assassin_sound;
 static bool assassin_sound_loaded = false;
 static bool assassin_nearby = false;
+
+// darkness effect tracking
+static bool darkness_active = false;
+static Vector2 darkness_offset = {0, 0};
+static std::chrono::steady_clock::time_point last_darkness_update;
+static float light_weakness = 0.3f; 
+
+// flashlight battery
+static float flashlight_time_left = 15.0f;  // 15 seconds of battery
+static bool flashlight_usable = true;
 
 void do_recv() {
   char buffer[1024];
@@ -67,7 +95,7 @@ void do_recv() {
 
       if (!packet.empty()) {
         std::lock_guard<std::mutex> lock(packets_mutex);
-        packets.push_back(packet);
+    packets.push_back(packet);
       }
     }
   }
@@ -75,7 +103,8 @@ void do_recv() {
 
 enum EventType {
   Darkness = 0,
-  Assasin = 1
+  Assasin = 1,
+  Clear = 2
 };
 
 void handle_packet(int packet_type, std::string payload, Game *game,
@@ -171,6 +200,29 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     if ((*game).players.find(std::stoi(payload)) != (*game).players.end())
       (*game).players.erase(std::stoi(payload));
     break;
+  case MSG_EVENT_SUMMON: {
+    std::istringstream iss(payload);
+    int event_type;
+    iss >> event_type;
+
+    if (iss.fail()) {
+      std::cerr << "Invalid MSG_EVENT_SUMMON packet: " << payload << std::endl;
+      break;
+    }
+
+    if (event_type == Darkness) {
+      std::cout << "Received darkness event: " << payload << std::endl;
+      darkness_active = true;
+      darkness_offset = {0, 0};
+      last_darkness_update = std::chrono::steady_clock::now();
+    } else if (event_type == Assasin) {
+      std::cout << "Received assasin event: " << payload << std::endl;
+    } else if (event_type == Clear) {
+      std::cout << "Received clear event: " << payload << std::endl;
+      darkness_active = false;
+    }
+    break;
+  }
   case MSG_PLAYER_UPDATE: {
     std::istringstream iss(payload);
     int id;
@@ -250,6 +302,21 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       std::cout << "Client: You are now the assassin! Your target is player ID: " << target_id << std::endl;
     }
     
+    break;
+  }
+  case MSG_SWITCH_WEAPON: {
+    std::istringstream iss(payload);
+    int player_id, weapon_id;
+    iss >> player_id >> weapon_id;
+    
+    if (iss.fail()) {
+      std::cerr << "Invalid MSG_SWITCH_WEAPON packet: " << payload << std::endl;
+      break;
+    }
+    
+    if (player_id != *my_id) {
+      game->players[player_id].weapon_id = weapon_id;
+    }
     break;
   }
   }
@@ -342,9 +409,9 @@ void do_username_prompt(std::string *usernameprompt, bool *usernamechosen,
 
   if (IsKeyPressed(KEY_ENTER) && !(*usernameprompt).empty() && my_id != -1) {
     if (acceptable_username(*usernameprompt)) {
-      *usernamechosen = true;
-      game_conf->username = *usernameprompt;
-      game_conf->colorindex = *mycolor;
+    *usernamechosen = true;
+    game_conf->username = *usernameprompt;
+    game_conf->colorindex = *mycolor;
       my_true_color = options[*mycolor];
 
       std::cout << "Client: Selected color index: " << *mycolor << std::endl;
@@ -383,6 +450,81 @@ void manage_username_prompt(playermap *players, int my_id, Color options[5],
     do_username_prompt(&usernameprompt, &usernamechosen, my_id, &clrindex,
                        options, game_conf, &settings_saved_indicator_timer);
   }
+}
+
+void update_darkness_effect() {
+  if (!darkness_active) return;
+  
+  auto current_time = std::chrono::steady_clock::now();
+  auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+      current_time - last_darkness_update).count();
+  
+  if (elapsed >= 1) {
+    // Generate random offset within 25x25 area
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(-12, 12); // -12 to +12 gives us 25x25 area
+    
+    darkness_offset.x = dis(gen);
+    darkness_offset.y = dis(gen);
+    last_darkness_update = current_time;
+  }
+}
+
+void draw_flashlight_cone(Vector2 playerScreenPos, float player_rotation) {
+  // flashlight parameters
+  float flashlight_range = 600.0f;
+  float flashlight_angle = 45.0f; // cone angle in degrees
+  
+  // convert rotation to radians
+  float angle_rad = (player_rotation - 90.0f) * DEG2RAD; // -90 to align with "up" direction
+  
+  // create flashlight cone using triangles
+  Vector2 player_center = {playerScreenPos.x, playerScreenPos.y};
+  
+  // calculate cone endpoints
+  float half_angle = (flashlight_angle * 0.5f) * DEG2RAD;
+  
+  Vector2 cone_left = {
+    player_center.x + cosf(angle_rad - half_angle) * flashlight_range,
+    player_center.y + sinf(angle_rad - half_angle) * flashlight_range
+  };
+  
+  Vector2 cone_right = {
+    player_center.x + cosf(angle_rad + half_angle) * flashlight_range,
+    player_center.y + sinf(angle_rad + half_angle) * flashlight_range
+  };
+  
+  Vector2 cone_center = {
+    player_center.x + cosf(angle_rad) * flashlight_range,
+    player_center.y + sinf(angle_rad) * flashlight_range
+  };
+  
+  // draw the main cone with high intensity (very transparent for strong light)
+  unsigned char main_intensity = (unsigned char)(255 * light_weakness * 0.2f); // Very strong light
+  Color main_cone_color = {255, 255, 255, main_intensity};
+  
+  // draw center triangle (strongest light)
+  DrawTriangle(player_center, cone_left, cone_center, main_cone_color);
+  DrawTriangle(player_center, cone_center, cone_right, main_cone_color);
+  
+  // draw outer edges with medium intensity
+  unsigned char edge_intensity = (unsigned char)(255 * light_weakness * 0.6f);
+  Color edge_cone_color = {255, 255, 255, edge_intensity};
+  
+  // add some width to the cone edges for smoother falloff
+  Vector2 outer_left = {
+    player_center.x + cosf(angle_rad - half_angle * 1.2f) * flashlight_range,
+    player_center.y + sinf(angle_rad - half_angle * 1.2f) * flashlight_range
+  };
+  
+  Vector2 outer_right = {
+    player_center.x + cosf(angle_rad + half_angle * 1.2f) * flashlight_range,
+    player_center.y + sinf(angle_rad + half_angle * 1.2f) * flashlight_range
+  };
+  
+  DrawTriangle(player_center, outer_left, cone_left, edge_cone_color);
+  DrawTriangle(player_center, cone_right, outer_right, edge_cone_color);
 }
 
 void draw_ui(Color my_ui_color, playermap players,
@@ -442,20 +584,51 @@ void draw_ui(Color my_ui_color, playermap players,
   // minimap
   DrawRectangle(window_size.x - 100, 0, 100, 100, GRAY);
 
-  for (auto &[id, p] : players) {
-    if (id == my_id) {
-      DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
-                    p.y / (PLAYING_AREA.height / 100), 10, 10, my_ui_color);
-    } else if (!color_equal(p.color, INVISIBLE)) {
-      DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
-                    p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
-    }
+  // Draw charging stations on minimap (always visible)
+  Color light_yellow = {255, 255, 200, 255};
+  for (int i = 0; i < 4; i++) {
+    float map_x = window_size.x - 100 + ((charging_points[i].x + CHARGE_SIZE/2) / (PLAYING_AREA.width / 100));
+    float map_y = (charging_points[i].y + CHARGE_SIZE/2) / (PLAYING_AREA.height / 100);
+    DrawCircle(map_x, map_y, 3, light_yellow);
   }
 
-  for (Bullet b : bullets)
-    DrawCircle(window_size.x - 100 + b.x / (PLAYING_AREA.width / 100),
-               b.y / (PLAYING_AREA.height / 100),
-               b.r / (PLAYING_AREA.width / 100), BLACK);
+  if (darkness_active) {
+    if (is_assassin) {
+      // Assassins see everyone normally during darkness
+      for (auto &[id, p] : players) {
+        if (id == my_id) {
+          DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                        p.y / (PLAYING_AREA.height / 100), 10, 10, my_ui_color);
+        } else if (!color_equal(p.color, INVISIBLE)) {
+          DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                        p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
+        }
+      }
+    } else {
+      // Non-assassins only see themselves with randomized position
+      if (players.count(my_id)) {
+        Player& local_player = players[my_id];
+        float map_x = window_size.x - 100 + (local_player.x / (PLAYING_AREA.width / 100)) + darkness_offset.x;
+        float map_y = (local_player.y / (PLAYING_AREA.height / 100)) + darkness_offset.y;
+        
+        map_x = std::max(window_size.x - 100.0f, std::min(window_size.x - 10.0f, map_x));
+        map_y = std::max(0.0f, std::min(90.0f, map_y));
+        
+        DrawRectangle(map_x, map_y, 10, 10, my_ui_color);
+      }
+    }
+  } else {
+    // Normal visibility (no darkness)
+    for (auto &[id, p] : players) {
+      if (id == my_id) {
+        DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                      p.y / (PLAYING_AREA.height / 100), 10, 10, my_ui_color);
+      } else if (!color_equal(p.color, INVISIBLE)) {
+        DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                      p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
+      }
+    }
+  }
 
   EndUiDrawing();
 }
@@ -467,77 +640,91 @@ void draw_players(playermap players, ResourceManager *res_man, int my_id) {
       continue;
       
     if (!color_equal(p.color, INVISIBLE) || id == my_id) {
-      Color clr = p.color;
+    Color clr = p.color;
       if (id == my_id && is_assassin) {
         DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
       } else if (id == my_id && color_equal(p.color, INVISIBLE)) {
         // draw with transparency using the original color
         DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
       } else {
-        DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
+    DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
       }
 
-      DrawText(p.username.c_str(),
-               p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
-               BLACK);
+    DrawText(p.username.c_str(),
+             p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
+             BLACK);
     }
 
-    // weapon
-    if (id == my_id && is_assassin) {
-      Vector2 player_center = {(float)p.x + 50, (float)p.y + 50};
-      float knife_offset = 80.0f;
-      
-      DrawTexturePro(res_man->getTex("assets/assassin_knife.png"), 
-                     {(float)0, (float)0, 16, 16},
-                     {player_center.x, player_center.y, 80, 80}, 
-                     {(float)40 + knife_offset, (float)40}, 
-                     p.rot, WHITE);
-    } else if (color_equal(p.color, INVISIBLE) && id != my_id) {
-      if (players.count(my_id)) {
-        float distance = sqrtf(powf(p.x - players[my_id].x, 2) + powf(p.y - players[my_id].y, 2));
-        float close_distance = 300.0f; 
-        
-        if (distance <= close_distance) {
+    // weapon drawing based on weapon_id
+    switch (static_cast<Weapon>(p.weapon_id)) {
+      case gun_or_knife: {
+        if (id == my_id && is_assassin) {
           Vector2 player_center = {(float)p.x + 50, (float)p.y + 50};
           float knife_offset = 80.0f;
           
-          // Calculate alpha based on distance - more transparent when further away
-          float alpha_scale = 1.0f - (distance / close_distance);
-          unsigned char alpha = (unsigned char)(alpha_scale * 192);
-          Color knife_tint = {255, 255, 255, alpha};
-          
           DrawTexturePro(res_man->getTex("assets/assassin_knife.png"), 
-                         {(float)0, (float)0, 16, 16}, 
+                         {(float)0, (float)0, 16, 16},
                          {player_center.x, player_center.y, 80, 80}, 
                          {(float)40 + knife_offset, (float)40}, 
-                         p.rot, knife_tint);
-          // play sound when close
-          if (!assassin_sound_loaded) {
-            assassin_sound = LoadSound("assets/assassin_close.wav");
-            assassin_sound_loaded = true;
+                         p.rot, WHITE);
+        } else if (color_equal(p.color, INVISIBLE) && id != my_id) {
+          if (players.count(my_id)) {
+            float distance = sqrtf(powf(p.x - players[my_id].x, 2) + powf(p.y - players[my_id].y, 2));
+            float close_distance = 300.0f; 
+            
+            if (distance <= close_distance) {
+              Vector2 player_center = {(float)p.x + 50, (float)p.y + 50};
+              float knife_offset = 80.0f;
+              
+              // Calculate alpha based on distance - more transparent when further away
+              float alpha_scale = 1.0f - (distance / close_distance);
+              unsigned char alpha = (unsigned char)(alpha_scale * 192);
+              Color knife_tint = {255, 255, 255, alpha};
+              
+              DrawTexturePro(res_man->getTex("assets/assassin_knife.png"), 
+                             {(float)0, (float)0, 16, 16}, 
+                             {player_center.x, player_center.y, 80, 80}, 
+                             {(float)40 + knife_offset, (float)40}, 
+                             p.rot, knife_tint);
+              // play sound when close
+              if (!assassin_sound_loaded) {
+                assassin_sound = LoadSound("assets/assassin_close.wav");
+                assassin_sound_loaded = true;
+              }
+              
+              float volume = 1.0f - (distance / close_distance);
+              volume = volume * 0.5f;
+              SetSoundVolume(assassin_sound, volume);
+              
+              // start or continue looping
+              if (!IsSoundPlaying(assassin_sound)) {
+                PlaySound(assassin_sound);
+              }
+              assassin_nearby = true;
+            } else {
+              // assassin moved away, stop the sound
+              if (assassin_nearby && IsSoundPlaying(assassin_sound)) {
+                StopSound(assassin_sound);
+              }
+              assassin_nearby = false;
+            }
           }
-          
-          float volume = 1.0f - (distance / close_distance);
-          volume = volume * 0.5f;
-          SetSoundVolume(assassin_sound, volume);
-          
-          // start or continue looping
-          if (!IsSoundPlaying(assassin_sound)) {
-            PlaySound(assassin_sound);
-          }
-          assassin_nearby = true;
         } else {
-          // assassin moved away, stop the sound
-          if (assassin_nearby && IsSoundPlaying(assassin_sound)) {
-            StopSound(assassin_sound);
-          }
-          assassin_nearby = false;
+          // gun/barrel/thing
+    DrawRectanglePro({(float)p.x + 50, (float)p.y + 50, 50, 20},
+                     {(float)100, (float)0}, p.rot, BLACK);
         }
+        break;
       }
-    } else {
-      // gun/barrel/thing
-      DrawRectanglePro({(float)p.x + 50, (float)p.y + 50, 50, 20},
-                       {(float)100, (float)0}, p.rot, BLACK);
+      case flashlight:
+        DrawTexturePro(res_man->getTex("assets/flashlight.png"), 
+                        {(float)0, (float)0, 16, 16},
+                        {(float)p.x + 50, (float)p.y + 50, 50, 50},
+                        {(float)100, (float)0}, p.rot, WHITE);
+        break;
+      default:
+        // Unknown weapon type - no drawing
+        break;
     }
   }
 }
@@ -562,6 +749,28 @@ bool move_wpn(float *rot, int cx, int cy, Camera2D cam, float scale,
   return *rot == oldrot;
 }
 
+bool move_flashlight(float *rot, int cx, int cy, Camera2D cam, float scale,
+                     float offsetX, float offsetY) {
+  // mouse position in window
+  Vector2 windowMouse = GetMousePosition();
+
+  // mouse position in render texture
+  Vector2 renderMouse = {(windowMouse.x - offsetX) / scale,
+                         (windowMouse.y - offsetY) / scale};
+
+  // mouse position in world space
+  Vector2 mousePos = GetScreenToWorld2D(renderMouse, cam);
+  Vector2 playerCenter = {(float)cx + 50, (float)cy + 50};
+  
+  // Calculate direction from player to mouse (opposite of weapon calculation)
+  Vector2 delta = Vector2Subtract(playerCenter, mousePos);
+  float angle = atan2f(delta.y, delta.x) * RAD2DEG;
+  float oldrot = *rot;
+  // Adjust angle for square flashlight (no offset needed like rectangular gun)
+  *rot = fmod(angle + 360.0f, 360.0f);
+  return *rot == oldrot;
+}
+
 void move_camera(Camera2D *cam, int cx, int cy) {
   // center the camera on the player
   cam->target = Vector2{(float)cx + 50, (float)cy + 50};
@@ -578,6 +787,18 @@ void move_camera(Camera2D *cam, int cx, int cy) {
     cam->target.y = viewHeight / 2;
   if (cam->target.y > PLAYING_AREA.height - viewHeight / 2)
     cam->target.y = PLAYING_AREA.height - viewHeight / 2;
+}
+
+bool check_charging_station_collision(int player_x, int player_y) {
+  for (int i = 0; i < 4; i++) {
+    if (player_x < charging_points[i].x + CHARGE_SIZE && 
+        player_x + PLAYER_SIZE > charging_points[i].x &&
+        player_y < charging_points[i].y + CHARGE_SIZE && 
+        player_y + PLAYER_SIZE > charging_points[i].y) {
+      return true;
+    }
+  }
+  return false;
 }
 
 int init_sock() {
@@ -607,6 +828,25 @@ std::string get_ip_from_args(int argc, char **argv) {
   return std::string("127.0.0.1");
 }
 
+bool switch_weapon(Weapon weapon, Game* game, int my_id, int sock, bool flashlight_usable) {
+  if (weapon == Weapon::flashlight && !flashlight_usable) {
+    std::cout << "Flashlight is not usable (battery depleted)" << std::endl;
+    return false;
+  }
+  
+  if (game->players[my_id].weapon_id == (int)weapon) {
+    return false;
+  }
+  
+  game->players[my_id].weapon_id = (int)weapon;
+  
+  std::ostringstream msg;
+  msg << "12\n" << my_id << " " << (int)weapon;
+  send_message(msg.str(), sock);
+  
+  return true;
+}
+
 int main(int argc, char **argv) {
   if (init_sock() == 1) return 1;
 
@@ -634,7 +874,7 @@ int main(int argc, char **argv) {
   }
 
   std::thread recv_thread(do_recv);
-  SetWindowState(FLAG_WINDOW_RESIZABLE);
+  SetConfigFlags(FLAG_WINDOW_RESIZABLE);
   
   InitWindow(800, 600, "Multi Ludens");
 
@@ -662,6 +902,40 @@ int main(int argc, char **argv) {
   cam.offset = Vector2{window_size.x / 2.0f, window_size.y / 2.0f};
   // create render texture to draw game at normal res
   RenderTexture2D target = LoadRenderTexture(window_size.x, window_size.y);
+  // Create light texture for darkness effect once
+  Texture2D lightTex = {0};
+  {
+    int size = 400;
+    Image lightImg = GenImageColor(size, size, Color{0, 0, 0, 0});
+    
+    float center = size / 2.0f;
+    float max_radius = 200.0f;
+    
+    for (int y = 0; y < size; y++) {
+      for (int x = 0; x < size; x++) {
+        float dx = x - center;
+        float dy = y - center;
+        float distance = sqrtf(dx * dx + dy * dy);
+        
+        if (distance <= max_radius) {
+          float alpha_factor = distance / max_radius;
+          alpha_factor = alpha_factor * alpha_factor;
+          unsigned char alpha = (unsigned char)(255.0f * (1.0f - alpha_factor));
+          
+          Color pixel_color = {255, 255, 255, alpha};
+          ImageDrawPixel(&lightImg, x, y, pixel_color);
+        }
+      }
+    }
+    
+    lightTex = LoadTextureFromImage(lightImg);
+    UnloadImage(lightImg);
+  }
+
+  RenderTexture2D darknessMask = LoadRenderTexture(window_size.x, window_size.y);
+  Image lightImg = GenImageGradientRadial(256, 256, 0.0f, WHITE, BLANK);
+  lightTex = LoadTextureFromImage(lightImg);
+  UnloadImage(lightImg);
 
   while (!WindowShouldClose() && running) {
     // calculate zoom based on actual window size relative to normal window size
@@ -678,6 +952,9 @@ int main(int argc, char **argv) {
       EndDrawing();
       continue;
     };
+
+    // update darkness effect
+    update_darkness_effect();
 
     // Put here to make sure id exists
     int cx = game.players[my_id].x;
@@ -700,10 +977,14 @@ int main(int argc, char **argv) {
     float scaledHeight = window_size.y * scale;
     float offsetX = (GetScreenWidth() - scaledWidth) * 0.5f;
     float offsetY = (GetScreenHeight() - scaledHeight) * 0.5f;
-
-    bool moved_gun = move_wpn(&game.players[my_id].rot, cx, cy, cam, scale,
+    bool moved_gun = false;
+    if (game.players[my_id].weapon_id == Weapon::gun_or_knife) {
+      moved_gun = move_wpn(&game.players[my_id].rot, cx, cy, cam, scale,
                               offsetX, offsetY);
-
+    } else if (game.players[my_id].weapon_id == Weapon::flashlight) {
+      moved_gun = move_flashlight(&game.players[my_id].rot, cx, cy, cam, scale,
+                              offsetX, offsetY);
+    }
     hasmoved = moved || moved_gun;
 
     if (server_update_counter >= 5 && hasmoved) {
@@ -742,6 +1023,48 @@ int main(int argc, char **argv) {
           sock);
     }
 
+    // flashlight battery
+    {
+      if (game.players[my_id].weapon_id == Weapon::flashlight && flashlight_usable) {
+        float deltaTime = GetFrameTime();
+        flashlight_time_left -= deltaTime;
+
+        if (flashlight_time_left <= 0.0f) {
+          flashlight_time_left = 0.0f;
+          flashlight_usable = false;
+          switch_weapon(Weapon::gun_or_knife, &game, my_id, sock, flashlight_usable);
+          std::cout << "Flashlight battery depleted!" << std::endl;
+        }
+      }
+      
+      // check charger coil 
+      if (!flashlight_usable && check_charging_station_collision(game.players[my_id].x, game.players[my_id].y)) {
+        flashlight_usable = true;
+        flashlight_time_left = 15.0f;  // Reset to full battery
+        std::cout << "Flashlight recharged at charging station!" << std::endl;
+      }
+    }
+
+    // detect weapon switching with keyboard keys
+    {
+      const int MAX_WEAPON_ID = 1;
+      
+      bool weapon_changed = false;
+      Weapon currentWeapon = (Weapon)game.players[my_id].weapon_id;
+      
+      if (IsKeyPressed(KEY_ONE)) {
+        currentWeapon = Weapon::gun_or_knife; 
+        weapon_changed = true;
+      } else if (IsKeyPressed(KEY_TWO) && flashlight_usable) {
+        currentWeapon = Weapon::flashlight; 
+        weapon_changed = true;
+      }
+      
+      if (weapon_changed && currentWeapon != game.players[my_id].weapon_id) {
+        switch_weapon(currentWeapon, &game, my_id, sock, flashlight_usable);
+      }
+    }
+
     // draw to render texture
     BeginTextureMode(target);
     ClearBackground(BLUE);
@@ -758,6 +1081,16 @@ int main(int argc, char **argv) {
       }
     }
 
+    // Draw charging stations
+    for (int i = 0; i < 4; i++) {
+      if (isInViewport(charging_points[i].x, charging_points[i].y, CHARGE_SIZE, CHARGE_SIZE, cam)) {
+        DrawTexturePro(res_man.getTex("assets/charger.png"),
+                       {0, 0, 16, 16}, 
+                       {(float)charging_points[i].x, (float)charging_points[i].y, (float)CHARGE_SIZE, (float)CHARGE_SIZE}, 
+                       {0, 0}, 0.0f, WHITE);
+      }
+    }
+
     draw_players(game.players, &res_man, my_id);
 
     for (Bullet &b : game.bullets)
@@ -765,10 +1098,177 @@ int main(int argc, char **argv) {
 
     EndMode2D();
 
-    // HUD
-    draw_ui(my_true_color, game.players, game.bullets, my_id,
-            bdelay, cam, scale);
+    EndTextureMode();
 
+    // Apply darkness effect if active and player is not assassin
+    if (darkness_active && !is_assassin) {
+      // Clear and prepare darkness mask each frame
+      BeginTextureMode(darknessMask);
+      ClearBackground(Color{0, 0, 0, 254}); // Slightly less dark (254 alpha instead of 255)
+      
+      // Draw lights for all players
+      for (auto &[id, p] : game.players) {
+        Vector2 playerScreenPos = GetWorldToScreen2D(
+          Vector2{(float)p.x + 50, (float)p.y + 50}, 
+          cam
+        );
+
+        if (id == my_id || p.weapon_id == Weapon::flashlight) {
+          DrawTexture(lightTex, 
+                     playerScreenPos.x - lightTex.width / 2, 
+                     playerScreenPos.y - lightTex.height / 2, 
+                     WHITE);
+        }
+        
+        // Draw flashlight beam if player has flashlight
+        if (p.weapon_id == Weapon::flashlight) {
+          float angleRad = (-p.rot + 5 + 180) * DEG2RAD;  // Add 180 degrees to point in the right direction
+          float flashlight_distance = 600.0f;  // How far the light reaches
+          
+          float spread_angle = 15.0f * DEG2RAD;  // Narrower beam
+          
+          for (int i = 0; i < 4; i++) {
+            float current_spread = spread_angle * (1.0f - (float)i / 4.0f);  // Narrower spread for inner beams
+            float alpha = 180 - (i * 40);  // Brighter in the center
+            
+            Vector2 beam_left = {
+              playerScreenPos.x + cosf(angleRad - current_spread) * flashlight_distance,
+              playerScreenPos.y - sinf(angleRad - current_spread) * flashlight_distance
+            };
+            
+            Vector2 beam_right = {
+              playerScreenPos.x + cosf(angleRad + current_spread) * flashlight_distance,
+              playerScreenPos.y - sinf(angleRad + current_spread) * flashlight_distance
+            };
+            
+            // Draw layered beams
+            Color beam_color = {255, 255, 255, (unsigned char)alpha};
+            DrawTriangle(playerScreenPos, beam_left, beam_right, beam_color);
+          }
+          
+          // Add a small intense light at the source
+          float source_size = 30.0f;
+          Color source_color = {255, 255, 255, 200};
+          DrawCircle(playerScreenPos.x, playerScreenPos.y, source_size, source_color);
+        }
+      }
+      EndTextureMode();
+      
+      // Apply darkness mask to main render target
+      BeginTextureMode(target);
+      BeginBlendMode(BLEND_MULTIPLIED);
+      
+      Rectangle source = {0, 0, (float)darknessMask.texture.width, (float)-darknessMask.texture.height};
+      Rectangle dest = {0, 0, (float)window_size.x, (float)window_size.y};
+      DrawTexturePro(darknessMask.texture, source, dest, Vector2{0, 0}, 0.0f, WHITE);
+      
+      EndBlendMode();
+      EndTextureMode();
+    }
+
+    // Draw all HUD elements on top (after darkness effect)
+    BeginTextureMode(target);
+    BeginUiDrawing();
+
+    DrawFPS(0, 0);
+
+    if (is_assassin && my_target_id != -1) {
+      // draw assassin status box at top center
+      DrawRectangle(300, 10, 200, 60, DARKGRAY);
+      DrawText("ASSASSIN MODE", 320, 20, 16, RED);
+      DrawText("Target:", 330, 35, 12, WHITE);
+      if (my_target_id == my_id) {
+        DrawText("Pending...", 330, 50, 12, YELLOW);
+      } else if (game.players.count(my_target_id)) {
+        DrawText(game.players[my_target_id].username.c_str(), 330, 50, 12, game.players[my_target_id].color);
+      } else {
+        DrawText("Unknown", 330, 50, 12, RED);
+      }
+    }
+
+    // Base dimensions for UI elements
+    float boxHeight = 50;
+    float padding = 5;
+    float squareSize = 40;
+    float textSize = 24;
+    float textPadding = 50;
+    float textWidth = MeasureText(game.players[my_id].username.c_str(), textSize);
+    float boxWidth = textPadding + textWidth + (padding * 2);
+
+    // fix name clipping out of box
+    if (boxWidth < squareSize + padding * 2) {
+      boxWidth = squareSize + padding * 2;
+    }
+
+    // position at bottom of render texture (not screen)
+    float y = window_size.y - boxHeight;
+
+    // background
+    DrawRectangle(0, y, boxWidth, boxHeight, DARKGRAY);
+
+    // player info
+    DrawRectangle(padding, y + (boxHeight - squareSize) / 2, squareSize,
+                  squareSize, my_true_color);
+    DrawText(game.players[my_id].username.c_str(), textPadding,
+             y + (boxHeight - textSize) / 2, textSize, WHITE);
+
+    // cooldown bar
+    if (bdelay != 20) {
+      float barHeight = 10;
+      float barY = y + boxHeight - padding - barHeight;
+      DrawRectangle(textPadding, barY, (20 - bdelay) * 2, barHeight, GREEN);
+    }
+
+    // minimap
+    DrawRectangle(window_size.x - 100, 0, 100, 100, GRAY);
+
+    // Draw charging stations on minimap (always visible)
+    Color light_yellow = {255, 255, 200, 255};
+    for (int i = 0; i < 4; i++) {
+      float map_x = window_size.x - 100 + ((charging_points[i].x + CHARGE_SIZE/2) / (PLAYING_AREA.width / 100));
+      float map_y = (charging_points[i].y + CHARGE_SIZE/2) / (PLAYING_AREA.height / 100);
+      DrawCircle(map_x, map_y, 3, light_yellow);
+    }
+
+    if (darkness_active) {
+      if (is_assassin) {
+        // Assassins see everyone normally during darkness
+        for (auto &[id, p] : game.players) {
+          if (id == my_id) {
+            DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                          p.y / (PLAYING_AREA.height / 100), 10, 10, my_true_color);
+          } else if (!color_equal(p.color, INVISIBLE)) {
+            DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                          p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
+          }
+        }
+      } else {
+        // Non-assassins only see themselves with randomized position
+        if (game.players.count(my_id)) {
+          Player& local_player = game.players[my_id];
+          float map_x = window_size.x - 100 + (local_player.x / (PLAYING_AREA.width / 100)) + darkness_offset.x;
+          float map_y = (local_player.y / (PLAYING_AREA.height / 100)) + darkness_offset.y;
+          
+          map_x = std::max(window_size.x - 100.0f, std::min(window_size.x - 10.0f, map_x));
+          map_y = std::max(0.0f, std::min(90.0f, map_y));
+          
+          DrawRectangle(map_x, map_y, 10, 10, my_true_color);
+        }
+      }
+    } else {
+      // Normal visibility (no darkness)
+      for (auto &[id, p] : game.players) {
+        if (id == my_id) {
+          DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                        p.y / (PLAYING_AREA.height / 100), 10, 10, my_true_color);
+        } else if (!color_equal(p.color, INVISIBLE)) {
+          DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
+                        p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
+        }
+      }
+    }
+
+    EndUiDrawing();
     EndTextureMode();
 
     // draw the scaled render texture to the window
@@ -786,6 +1286,10 @@ int main(int argc, char **argv) {
 
   // Cleanup
   UnloadRenderTexture(target);
+  UnloadRenderTexture(darknessMask);
+  if (lightTex.id != 0) {
+    UnloadTexture(lightTex);
+  }
   std::cout << "Closing.\n";
 
   running = false;
@@ -799,3 +1303,4 @@ int main(int argc, char **argv) {
 
   return clean_sock(); // return 0 if successful
 }
+

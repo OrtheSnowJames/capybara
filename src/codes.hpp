@@ -9,6 +9,4 @@ inline const int MSG_PLAYER_UPDATE = 5;      // Format: "5\n<player_id> <usernam
 inline const int MSG_BULLET_SHOT = 10;       // Format: "10\n<player_id> <x> <y> <rotation>"
 inline const int MSG_EVENT_SUMMON = 11;      // Format: "11\n<event_type as int>" 
 inline const int MSG_SWITCH_WEAPON = 12;     // Format: "12\n<player_id> <weapon_id>"
-inline const int MSG_CHARGE_FLASHLIGHT = 13; // Format: "13\n<player_id>", not implemented yet
-inline const int MSG_FLASHLIGHT_SHOT = 14;   // Format: "14\n<player_id> <x> <y> <rotation>", not implemented yet
 inline const int MSG_ASSASSIN_CHANGE = 15;   // Format: "15\n<player_id> <target_id>" 

@@ -23,7 +23,7 @@ public:
     if (color_equal(clr, ORANGE))
       return getTex("assets/player_orangle.png");
     if (color_equal(clr, PURPLE))
-      return getTex("assets/player_PURPLE.png");
+      return getTex("assets/player_purple.png");
     return getTex("assets/player_red.png");
   }
 
