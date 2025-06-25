@@ -10,7 +10,9 @@
 #include "networking.hpp"
 #include "player.hpp"
 #include "resource_manager.hpp"
+#include "rainanimation.hpp"
 #include "utils.hpp"
+#include "umbrella.hpp"
 #include <atomic>
 #include <cstdio>
 #include <iostream>
@@ -69,6 +71,22 @@ static float light_weakness = 0.3f;
 // flashlight battery
 static float flashlight_time_left = 15.0f;  // 15 seconds of battery
 static bool flashlight_usable = true;
+
+// acid rain
+static AcidRain acid_rain;
+
+// umbrella
+static Umbrella player_umbrella;
+static bool umbrella_usable = true;
+
+// umbrella barrel
+const int BARREL_SIZE = 50;
+static Rectangle umbrella_barrel = {
+  (PLAYING_AREA.width / 2) - (BARREL_SIZE / 2),
+  (PLAYING_AREA.height / 2) - (BARREL_SIZE / 2),
+  BARREL_SIZE,
+  BARREL_SIZE
+}; // middle of the playing field
 
 void do_recv() {
   char buffer[1024];
@@ -219,7 +237,10 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       std::cout << "Received assasin event: " << payload << std::endl;
     } else if (event_type == Clear) {
       std::cout << "Received clear event: " << payload << std::endl;
+
+      // clear all events
       darkness_active = false;
+      acid_rain.stop();
     }
     break;
   }
@@ -549,12 +570,12 @@ void draw_ui(Color my_ui_color, playermap players,
   }
 
   // Base dimensions for UI elements
-  float boxHeight = 50;
-  float padding = 5;
-  float squareSize = 40;
-  float textSize = 24;
-  float textPadding = 50;
-  float textWidth = MeasureText(players[my_id].username.c_str(), textSize);
+  const float boxHeight = 50;
+  const float padding = 5;
+  const float squareSize = 40;
+  const float textSize = 24;
+  const float textPadding = 50;
+  const float textWidth = MeasureText(players[my_id].username.c_str(), textSize);
   float boxWidth = textPadding + textWidth + (padding * 2);
 
   // fix name clipping out of box
@@ -647,12 +668,12 @@ void draw_players(playermap players, ResourceManager *res_man, int my_id) {
         // draw with transparency using the original color
         DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color), p.x, p.y, 128);
       } else {
-    DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
+        DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y, WHITE);
       }
 
-    DrawText(p.username.c_str(),
-             p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
-             BLACK);
+      DrawText(p.username.c_str(),
+               p.x + 50 - MeasureText(p.username.c_str(), 32) / 2, p.y - 50, 32,
+               BLACK);
     }
 
     // weapon drawing based on weapon_id
@@ -721,6 +742,17 @@ void draw_players(playermap players, ResourceManager *res_man, int my_id) {
                         {(float)0, (float)0, 16, 16},
                         {(float)p.x + 50, (float)p.y + 50, 50, 50},
                         {(float)100, (float)0}, p.rot, WHITE);
+        break;
+      case umbrella:
+        if (id == my_id) {
+          player_umbrella.is_active = true;
+          player_umbrella.draw(res_man, p.x, p.y);
+        } else {
+          DrawTexturePro(res_man->getTex("assets/umbrella.png"), 
+                       {(float)0, (float)0, 16, 16},
+                       {(float)p.x + 50, (float)p.y - 35, 75, 75},
+                       {(float)37.5, (float)60}, 0, WHITE);
+        }
         break;
       default:
         // Unknown weapon type - no drawing
@@ -1047,7 +1079,7 @@ int main(int argc, char **argv) {
 
     // detect weapon switching with keyboard keys
     {
-      const int MAX_WEAPON_ID = 1;
+      const int MAX_WEAPON_ID = 2;
       
       bool weapon_changed = false;
       Weapon currentWeapon = (Weapon)game.players[my_id].weapon_id;
@@ -1058,12 +1090,37 @@ int main(int argc, char **argv) {
       } else if (IsKeyPressed(KEY_TWO) && flashlight_usable) {
         currentWeapon = Weapon::flashlight; 
         weapon_changed = true;
+      } else if (IsKeyPressed(KEY_THREE) && umbrella_usable) {
+        currentWeapon = Weapon::umbrella;
+        weapon_changed = true;
       }
       
       if (weapon_changed && currentWeapon != game.players[my_id].weapon_id) {
         switch_weapon(currentWeapon, &game, my_id, sock, flashlight_usable);
       }
     }
+
+    // update umbrella
+    {
+      Rectangle player_rect = {(float)game.players[my_id].x, (float)game.players[my_id].y, (float)PLAYER_SIZE, (float)PLAYER_SIZE};
+      std::vector<Rectangle> bullets_rects;
+      for (Bullet &b : game.bullets) {
+        bullets_rects.push_back(Rectangle{(float)b.x, (float)b.y, (float)b.r * 2, (float)b.r * 2});
+      }
+
+      umbrella_usable = player_umbrella.update(umbrella_barrel, player_rect, bullets_rects, game.players[my_id].weapon_id == Weapon::umbrella);
+
+      // if the umbrella is destroyed, switch to gun a
+      if (!umbrella_usable && game.players[my_id].weapon_id == Weapon::umbrella) {
+        game.players[my_id].weapon_id = Weapon::gun_or_knife;
+        
+        // weapon switch message 
+        std::ostringstream msg;
+        msg << "12\n" << my_id << " " << (int)Weapon::gun_or_knife;
+        send_message(msg.str(), sock);
+      }
+    }
+
 
     // draw to render texture
     BeginTextureMode(target);
@@ -1091,10 +1148,16 @@ int main(int argc, char **argv) {
       }
     }
 
+    // Draw repair barrel
+    DrawRectangleRec(umbrella_barrel, BROWN);
+
     draw_players(game.players, &res_man, my_id);
 
     for (Bullet &b : game.bullets)
       b.show();
+
+    // Draw acid rain effect
+    acid_rain.draw();
 
     EndMode2D();
 
@@ -1104,7 +1167,7 @@ int main(int argc, char **argv) {
     if (darkness_active && !is_assassin) {
       // Clear and prepare darkness mask each frame
       BeginTextureMode(darknessMask);
-      ClearBackground(Color{0, 0, 0, 254}); // Slightly less dark (254 alpha instead of 255)
+      ClearBackground(Color{0, 0, 0, 254}); 
       
       // Draw lights for all players
       for (auto &[id, p] : game.players) {
@@ -1168,107 +1231,7 @@ int main(int argc, char **argv) {
 
     // Draw all HUD elements on top (after darkness effect)
     BeginTextureMode(target);
-    BeginUiDrawing();
-
-    DrawFPS(0, 0);
-
-    if (is_assassin && my_target_id != -1) {
-      // draw assassin status box at top center
-      DrawRectangle(300, 10, 200, 60, DARKGRAY);
-      DrawText("ASSASSIN MODE", 320, 20, 16, RED);
-      DrawText("Target:", 330, 35, 12, WHITE);
-      if (my_target_id == my_id) {
-        DrawText("Pending...", 330, 50, 12, YELLOW);
-      } else if (game.players.count(my_target_id)) {
-        DrawText(game.players[my_target_id].username.c_str(), 330, 50, 12, game.players[my_target_id].color);
-      } else {
-        DrawText("Unknown", 330, 50, 12, RED);
-      }
-    }
-
-    // Base dimensions for UI elements
-    float boxHeight = 50;
-    float padding = 5;
-    float squareSize = 40;
-    float textSize = 24;
-    float textPadding = 50;
-    float textWidth = MeasureText(game.players[my_id].username.c_str(), textSize);
-    float boxWidth = textPadding + textWidth + (padding * 2);
-
-    // fix name clipping out of box
-    if (boxWidth < squareSize + padding * 2) {
-      boxWidth = squareSize + padding * 2;
-    }
-
-    // position at bottom of render texture (not screen)
-    float y = window_size.y - boxHeight;
-
-    // background
-    DrawRectangle(0, y, boxWidth, boxHeight, DARKGRAY);
-
-    // player info
-    DrawRectangle(padding, y + (boxHeight - squareSize) / 2, squareSize,
-                  squareSize, my_true_color);
-    DrawText(game.players[my_id].username.c_str(), textPadding,
-             y + (boxHeight - textSize) / 2, textSize, WHITE);
-
-    // cooldown bar
-    if (bdelay != 20) {
-      float barHeight = 10;
-      float barY = y + boxHeight - padding - barHeight;
-      DrawRectangle(textPadding, barY, (20 - bdelay) * 2, barHeight, GREEN);
-    }
-
-    // minimap
-    DrawRectangle(window_size.x - 100, 0, 100, 100, GRAY);
-
-    // Draw charging stations on minimap (always visible)
-    Color light_yellow = {255, 255, 200, 255};
-    for (int i = 0; i < 4; i++) {
-      float map_x = window_size.x - 100 + ((charging_points[i].x + CHARGE_SIZE/2) / (PLAYING_AREA.width / 100));
-      float map_y = (charging_points[i].y + CHARGE_SIZE/2) / (PLAYING_AREA.height / 100);
-      DrawCircle(map_x, map_y, 3, light_yellow);
-    }
-
-    if (darkness_active) {
-      if (is_assassin) {
-        // Assassins see everyone normally during darkness
-        for (auto &[id, p] : game.players) {
-          if (id == my_id) {
-            DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
-                          p.y / (PLAYING_AREA.height / 100), 10, 10, my_true_color);
-          } else if (!color_equal(p.color, INVISIBLE)) {
-            DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
-                          p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
-          }
-        }
-      } else {
-        // Non-assassins only see themselves with randomized position
-        if (game.players.count(my_id)) {
-          Player& local_player = game.players[my_id];
-          float map_x = window_size.x - 100 + (local_player.x / (PLAYING_AREA.width / 100)) + darkness_offset.x;
-          float map_y = (local_player.y / (PLAYING_AREA.height / 100)) + darkness_offset.y;
-          
-          map_x = std::max(window_size.x - 100.0f, std::min(window_size.x - 10.0f, map_x));
-          map_y = std::max(0.0f, std::min(90.0f, map_y));
-          
-          DrawRectangle(map_x, map_y, 10, 10, my_true_color);
-        }
-      }
-    } else {
-      // Normal visibility (no darkness)
-      for (auto &[id, p] : game.players) {
-        if (id == my_id) {
-          DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
-                        p.y / (PLAYING_AREA.height / 100), 10, 10, my_true_color);
-        } else if (!color_equal(p.color, INVISIBLE)) {
-          DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
-                        p.y / (PLAYING_AREA.height / 100), 10, 10, p.color);
-        }
-      }
-    }
-
-    EndUiDrawing();
+    draw_ui(my_true_color, game.players, game.bullets, my_id, (20 - bdelay), cam, scale);
     EndTextureMode();
 
     // draw the scaled render texture to the window

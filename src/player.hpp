@@ -5,7 +5,8 @@
 
 enum Weapon {
   gun_or_knife = 0,
-  flashlight = 1
+  flashlight = 1,
+  umbrella = 2
 };
 
 struct Player {
@@ -18,7 +19,7 @@ public:
   Color color = RED;
   std::string username = std::string("unset");
   float rot = 0;
-  int weapon_id = 0;  // 0 = gun or knife (default), 1 = flashlight
+  int weapon_id = 0;  // 0 = gun or knife (default), 1 = flashlight, 2 = umbrella
 
   Player(int x, int y) : x(x), y(y), nx(x), ny(y) {}
 

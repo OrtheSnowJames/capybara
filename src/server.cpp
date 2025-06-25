@@ -43,6 +43,11 @@ std::mutex darkness_mutex;
 bool darkness_active = false;
 std::chrono::steady_clock::time_point darkness_start_time;
 
+// acid rain event tracking
+std::mutex acid_rain_mutex;
+bool acid_rain_active = false;
+std::chrono::steady_clock::time_point acid_rain_start_time;
+
 typedef std::list<std::pair<int, std::string>> packetlist;
 
 std::mutex packets_mutex;
@@ -61,13 +66,15 @@ std::map<int, std::chrono::steady_clock::time_point> pending_assassins;
 
 std::set<int> previous_targets;  // previous targets
 
-// Lock order: game_mutex -> assassin_mutex -> pending_assassin_mutex -> darkness_mutex -> clients_mutex
+// Lock order: game_mutex -> assassin_mutex -> pending_assassin_mutex -> darkness_mutex -> acid_rain_mutex -> clients_mutex
 // This order must be maintained in all functions to prevent deadlocks
 
 enum EventType {
   Darkness = 0,
   Assasin = 1,
-  Clear = 2
+  Clear = 2,
+  AcidRain = 3,
+  NOTHING = 100
 };
 
 void clear_assassin_state_unlocked() {
@@ -430,12 +437,12 @@ void make_player_assassin(int target_id) {
   broadcast_message(response.str(), clients);
 }
 
-void summon_event(int delay, EventType event_type = EventType::Clear) {
-  if (delay <= 70 && event_type == EventType::Clear) {
+void summon_event(int delay, EventType event_type = EventType::NOTHING) {
+  if (delay <= 70 && event_type == EventType::NOTHING) {
     return; // too short to summon an event (only applies to random events)
   }
-  if (event_type == EventType::Clear) {
-    event_type = random_enum_element(EventType::Darkness, EventType::Assasin);
+  if (event_type == EventType::NOTHING) {
+    event_type = random_enum_element(EventType::Darkness, EventType::AcidRain);
   }
 
   switch (event_type) {
@@ -487,6 +494,30 @@ void summon_event(int delay, EventType event_type = EventType::Clear) {
       }
       break;
     }
+    case EventType::Clear: {
+      std::scoped_lock locks(darkness_mutex, clients_mutex);
+      if (darkness_active) {
+        darkness_active = false;
+      }
+      if (acid_rain_active) {
+        acid_rain_active = false;
+      }
+      break;
+    }
+    case EventType::AcidRain: {
+      std::scoped_lock locks(acid_rain_mutex, clients_mutex);
+      if (!acid_rain_active) {
+        acid_rain_active = true;
+        acid_rain_start_time = std::chrono::steady_clock::now();
+        
+        // send a message to all clients to start the acid rain event
+        std::ostringstream event_response;
+        event_response << "11\n" << EventType::AcidRain;
+        broadcast_message(event_response.str(), clients);
+        
+      }
+      break;
+    }
   };
 }
 
@@ -526,6 +557,27 @@ void check_pending_assassins() {
         broadcast_message(clear_response.str(), clients);
         
         std::cout << "Darkness event ended after 60 seconds" << std::endl;
+      }
+    }
+  }
+
+  // also check acid rain event timeout (1 minute)
+  {
+    std::lock_guard<std::mutex> acid_rain_lock(acid_rain_mutex);
+    if (acid_rain_active) {
+      auto current_time = std::chrono::steady_clock::now();
+      auto acid_rain_duration = std::chrono::duration_cast<std::chrono::seconds>(
+          current_time - acid_rain_start_time).count();
+          
+      if (acid_rain_duration >= 60) {
+        acid_rain_active = false;
+        
+        // send clear event message to all clients
+        std::ostringstream clear_response;
+        clear_response << "11\n" << EventType::Clear;
+        broadcast_message(clear_response.str(), clients);
+        
+        std::cout << "Acid rain event ended after 60 seconds" << std::endl;
       }
     }
   }
@@ -601,6 +653,10 @@ void handle_stdin_commands() {
       make_player_assassin(target_id);
     } else if (command == "darkness") {
       summon_event(0, EventType::Darkness);
+    } else if (command == "clear") {
+      summon_event(0, EventType::Clear);
+    } else if (command == "acid_rain") {
+      //summon_event(0, EventType::AcidRain);
     } else {
       std::cout << "Unknown command: " << command << std::endl;
     }
@@ -669,11 +725,13 @@ int main() {
 
   if (bind_socket(sock, (struct sockaddr *)&sock_addr, sizeof(sock_addr)) < 0) {
     perror("Failed to bind socket");
+    close_socket(sock);
     return -1;
   }
 
   if (listen_socket(sock, 5) < 0) {
     perror("Failed to listen on socket");
+    close_socket(sock);
     return -1;
   }
 
@@ -804,6 +862,8 @@ int main() {
 
               // handle assassination
               if (collision_occurred) {
+                // ANDY SHALL HANDLE ASSASSIN DAMAGE HERE
+                // TODO: Implement assassin damage
                 std::cout << "ASSASSIN SUCCESS! Player " << current_assassin_id << " hit target " << current_target_id << std::endl;
                 // Store current assassin as last assassin
                 last_assassin_id = current_assassin_id;
