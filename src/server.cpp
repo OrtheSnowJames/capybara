@@ -77,6 +77,8 @@ enum EventType {
   NOTHING = 100
 };
 
+static std::vector<Rectangle> bullet_colliders;
+
 void clear_assassin_state_unlocked() {
   std::cout << "Clearing assassin state" << std::endl;
   
@@ -506,6 +508,7 @@ void summon_event(int delay, EventType event_type = EventType::NOTHING) {
     }
     case EventType::AcidRain: {
       std::scoped_lock locks(acid_rain_mutex, clients_mutex);
+      std::cout << "Acid rain event started" << std::endl;
       if (!acid_rain_active) {
         acid_rain_active = true;
         acid_rain_start_time = std::chrono::steady_clock::now();
@@ -656,7 +659,7 @@ void handle_stdin_commands() {
     } else if (command == "clear") {
       summon_event(0, EventType::Clear);
     } else if (command == "acid_rain") {
-      //summon_event(0, EventType::AcidRain);
+      summon_event(0, EventType::AcidRain);
     } else {
       std::cout << "Unknown command: " << command << std::endl;
     }
@@ -698,6 +701,47 @@ void accept_clients(int sock) {
       is_running[id] = true;
     } else {
       close_socket(client);
+    }
+  }
+}
+
+void update_bullets() {
+  std::scoped_lock locks(game_mutex, clients_mutex);
+  
+  auto it = game.bullets.begin();
+  while (it != game.bullets.end()) {
+    bool should_despawn = false;
+    
+    // Move bullet
+    it->move();
+    
+    // Check map boundaries
+    if (it->x < 0 || it->x > PLAYING_AREA.width ||
+        it->y < 0 || it->y > PLAYING_AREA.height) {
+      should_despawn = true;
+    }
+    
+    // Check collider collisions
+    if (!should_despawn) {
+      Rectangle bullet_rect = {(float)it->x, (float)it->y, it->r * 2, it->r * 2};
+      for (const Rectangle& collider : bullet_colliders) {
+        if (CheckCollisionRecs(bullet_rect, collider)) {
+          should_despawn = true;
+          break;
+        }
+      }
+    }
+    
+    if (should_despawn) {
+      // Send despawn message to all clients
+      std::ostringstream msg;
+      msg << "16\n" << it->bullet_id;
+      broadcast_message(msg.str(), clients);
+      
+      // Remove bullet
+      it = game.bullets.erase(it);
+    } else {
+      ++it;
     }
   }
 }
@@ -956,13 +1000,17 @@ int main() {
               Vector2 origin = {(float)game.players[from_id].x + 50,
                                 (float)game.players[from_id].y + 50};
               Vector2 spawnPos = Vector2Add(origin, spawnOffset);
-              game.bullets.push_back(
-                  Bullet((int)spawnPos.x, (int)spawnPos.y, dir, from_id));
+              
+              Bullet new_bullet((int)spawnPos.x, (int)spawnPos.y, dir, from_id);
+              game.bullets.push_back(new_bullet);
               
               std::ostringstream j;
               j << "10\n"
-                << from_id << ' ' << (int)spawnPos.x << ' ' << (int)spawnPos.y
-                << ' ' << rot;
+                << from_id << ' ' 
+                << new_bullet.bullet_id << ' '
+                << (int)spawnPos.x << ' ' 
+                << (int)spawnPos.y << ' '
+                << rot;
               std::cout << j.str() << '\n';
               broadcast_message(j.str(), clients, from_id);
             } break;
@@ -995,6 +1043,9 @@ int main() {
         }
       }
     }
+
+    // update bullets
+    update_bullets();
   }
 
   std::cout << "Main loop stopped. Starting cleanup..." << std::endl;

@@ -10,9 +10,10 @@ struct RainDrop {
     float speed;
     float size;
     float alpha;
+    bool hidden = false;
 };
 
-class AcidRain {
+class AcidRainEvent {
 private:
     float timer = 0.0f;
     float interval = 10.0f;
@@ -26,9 +27,8 @@ private:
     const float MAX_SIZE = 5.0f;
 
 public:
-    AcidRain() = default;
+    AcidRainEvent() = default;
 
-    // Start acid rain with a delay before first event
     void start(float initialDelay) {
         active = true;
         timer = 0.0f;
@@ -37,13 +37,11 @@ public:
         raindrops.clear();
     }
 
-    // Stop acid rain events
     void stop() {
         active = false;
         raindrops.clear();
     }
 
-    // Call this every frame with delta time (seconds)
     void update(float dt) {
         if (!active) return;
 
@@ -62,7 +60,7 @@ public:
             }
         }
 
-        // Add new raindrops
+        // add new raindrops
         if (raindrops.size() < MAX_DROPS && GetRandomValue(0, 100) < 30) {
             RainDrop drop;
             drop.position.x = GetRandomValue(0, PLAYING_AREA.width);
@@ -80,18 +78,27 @@ public:
         }
     }
 
-    void draw() {
+    void draw(playermap players) {
         if (!active) return;
 
-        for (const auto& drop : raindrops) {
-            Color dropColor = {0, 255, 0, (unsigned char)(drop.alpha * 255)}; // Green with alpha
-            DrawCircle(drop.position.x, drop.position.y, drop.size, dropColor);
-            
-            // Draw trail
-            float trailLength = drop.speed * 0.05f;
-            Vector2 trailEnd = {drop.position.x, drop.position.y - trailLength};
-            Color trailColor = {0, 255, 0, (unsigned char)(drop.alpha * 128)}; // More transparent trail
-            DrawLineEx(drop.position, trailEnd, drop.size * 0.5f, trailColor);
+        for (auto& drop : raindrops) {
+            for (const auto& [id, player] : players) {
+                if (raindrop_touching_player(drop, player)) {
+                    drop.hidden = true;
+                } else {
+                    drop.hidden = false;
+                }
+            }
+            if (!drop.hidden) {
+                Color dropColor = {0, 255, 0, (unsigned char)(drop.alpha * 255)}; // Green with alpha
+                DrawCircle(drop.position.x, drop.position.y, drop.size, dropColor);
+                
+                // Draw trail
+                float trailLength = drop.speed * 0.05f;
+                Vector2 trailEnd = {drop.position.x, drop.position.y - trailLength};
+                Color trailColor = {0, 255, 0, (unsigned char)(drop.alpha * 128)}; // More transparent trail
+                DrawLineEx(drop.position, trailEnd, drop.size * 0.5f, trailColor);
+            }
         }
     }
 
@@ -107,5 +114,21 @@ private:
             drop.alpha = 1.0f;
             raindrops.push_back(drop);
         }
+    }
+
+    bool raindrop_touching_player(RainDrop drop, Player player) {
+        Rectangle drop_rect = {drop.position.x - drop.size, drop.position.y - drop.size, drop.size * 2, drop.size * 2};
+        Rectangle player_rect;
+
+        if (player.weapon_id == (int)Weapon::umbrella) {
+            player_rect = {(float)player.x, (float)player.y - 85, 75, 150};
+        } else {
+            player_rect = {(float)player.x, (float)player.y, 50, 50};
+        }
+
+        if (CheckCollisionRecs(drop_rect, player_rect)) {
+            return true;
+        }
+        return false;
     }
 };

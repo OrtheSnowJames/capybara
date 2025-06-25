@@ -1,20 +1,26 @@
 #pragma once
 #include <raylib.h>
 #include <vector>
+#include <set>
 #include "constants.hpp"
 #include "resource_manager.hpp"
+#include "bullet.hpp"
 
 class Umbrella {
     public:
         Rectangle our_position;
         bool is_usable = true;
         bool is_active = false;
+        Color tint = WHITE;
+        std::set<int> hit_by_bullets;
+
         Umbrella() {}
         ~Umbrella() {}
-        bool update(Rectangle barrel, Rectangle player, std::vector<Rectangle> bullets, bool is_active) {
+        bool update(Rectangle barrel, Rectangle player, std::vector<Rectangle> bullets, std::vector<Bullet>& game_bullets, bool is_active) {
             if (CheckCollisionRecs(barrel, player)) {
                 how_many_times_hit = 0;
                 is_usable = true;
+                hit_by_bullets.clear();
             }
 
             if (!is_active) return is_usable;
@@ -29,17 +35,37 @@ class Umbrella {
             
             if (is_usable) {
                 hit_cooldown -= GetFrameTime();
-                for (const Rectangle& bullet : bullets) {
-                    if (hit_cooldown <= 0 && CheckCollisionRecs(our_position, bullet)) {
-                        how_many_times_hit++;
-                        hit_cooldown = 0.1f; // 100ms cooldown between hits
-                        std::cout << "Umbrella hit! Hits: " << how_many_times_hit << std::endl;
-                        if (how_many_times_hit >= UMBRELLA_HIT_LIMIT) {
-                            is_usable = false;
-                            std::cout << "Umbrella destroyed!" << std::endl;
-                            break;
+                
+                // Fade tint back to white
+                if (tint.r < 255) tint.r += 5;
+                if (tint.g < 255) tint.g += 5;
+                if (tint.b < 255) tint.b += 5;
+
+                bool was_hit = false;
+                for (size_t i = 0; i < bullets.size(); i++) {
+                    const Rectangle& bullet_rect = bullets[i];
+                    const Bullet& bullet = game_bullets[i];
+                    
+                    if (hit_cooldown <= 0 && CheckCollisionRecs(our_position, bullet_rect)) {
+                        // Only count hit if we haven't been hit by this bullet before
+                        if (hit_by_bullets.find(bullet.bullet_id) == hit_by_bullets.end()) {
+                            how_many_times_hit++;
+                            hit_cooldown = 0.5f; // 500ms cooldown between hits
+                            was_hit = true;
+                            hit_by_bullets.insert(bullet.bullet_id);
+                            std::cout << "Umbrella hit by bullet " << bullet.bullet_id << "! Hits: " << how_many_times_hit << std::endl;
+                            if (how_many_times_hit >= UMBRELLA_HIT_LIMIT) {
+                                is_usable = false;
+                                std::cout << "Umbrella destroyed!" << std::endl;
+                                break;
+                            }
                         }
                     }                
+                }
+                
+                // Set red tint on hit
+                if (was_hit) {
+                    tint = RED;
                 }
             }
 
@@ -52,7 +78,7 @@ class Umbrella {
             DrawTexturePro(res_man->getTex("assets/umbrella.png"), 
                          {(float)0, (float)0, 16, 16},
                          {player_x + 50, player_y - 35, 75, 75},
-                         {(float)37.5, (float)60}, 0, WHITE);
+                         {(float)37.5, (float)60}, 0, tint);
         }
     private:
         int how_many_times_hit = 0;

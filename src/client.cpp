@@ -73,7 +73,7 @@ static float flashlight_time_left = 15.0f;  // 15 seconds of battery
 static bool flashlight_usable = true;
 
 // acid rain
-static AcidRain acid_rain;
+static AcidRainEvent acid_rain;
 
 // umbrella
 static Umbrella player_umbrella;
@@ -81,12 +81,14 @@ static bool umbrella_usable = true;
 
 // umbrella barrel
 const int BARREL_SIZE = 50;
+const int BARREL_COLLISION_SIZE = BARREL_SIZE * 2;
 static Rectangle umbrella_barrel = {
-  (PLAYING_AREA.width / 2) - (BARREL_SIZE / 2),
-  (PLAYING_AREA.height / 2) - (BARREL_SIZE / 2),
-  BARREL_SIZE,
-  BARREL_SIZE
+  (PLAYING_AREA.width / 2) - (BARREL_COLLISION_SIZE / 2),  // Center the larger collision box
+  (PLAYING_AREA.height / 2) - (BARREL_COLLISION_SIZE / 2),
+  BARREL_COLLISION_SIZE,
+  BARREL_COLLISION_SIZE
 }; // middle of the playing field
+
 
 void do_recv() {
   char buffer[1024];
@@ -122,7 +124,9 @@ void do_recv() {
 enum EventType {
   Darkness = 0,
   Assasin = 1,
-  Clear = 2
+  Clear = 2,
+  AcidRain = 3,
+  NOTHING = 100
 };
 
 void handle_packet(int packet_type, std::string payload, Game *game,
@@ -235,6 +239,9 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       last_darkness_update = std::chrono::steady_clock::now();
     } else if (event_type == Assasin) {
       std::cout << "Received assasin event: " << payload << std::endl;
+    } else if (event_type == AcidRain) {
+      std::cout << "Received acid rain event: " << payload << std::endl;
+      acid_rain.start(0.0f);
     } else if (event_type == Clear) {
       std::cout << "Received clear event: " << payload << std::endl;
 
@@ -282,10 +289,10 @@ void handle_packet(int packet_type, std::string payload, Game *game,
   } break;
   case MSG_BULLET_SHOT: {
     std::istringstream j(payload);
-    int from_id, x, y;
+    int from_id, bullet_id, x, y;
     float rot;
 
-    j >> from_id >> x >> y >> rot;
+    j >> from_id >> bullet_id >> x >> y >> rot;
 
     float angleRad = (-rot + 5) * DEG2RAD;
     float bspeed = 10;
@@ -295,11 +302,24 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     std::cout << from_id << ' ' << x << ' ' << y << ' ' << ' ' << dir.x << ' '
               << dir.y << std::endl;
 
-    (*game).bullets.push_back(Bullet(x, y, dir, from_id));
+    Bullet new_bullet(x, y, dir, from_id);
+    new_bullet.bullet_id = bullet_id;
+    game->bullets.push_back(new_bullet);
 
-    std::cout << "added bullet at " << x << ' ' << y << " with dir " << dir.x
+    std::cout << "added bullet " << bullet_id << " at " << x << ' ' << y << " with dir " << dir.x
               << ' ' << dir.y << std::endl;
 
+    break;
+  }
+  case MSG_BULLET_DESPAWN: {
+    int bullet_id = std::stoi(payload);
+    
+    game->bullets.erase(
+      std::remove_if(game->bullets.begin(), game->bullets.end(),
+                    [bullet_id](const Bullet& b) { return b.bullet_id == bullet_id; }),
+      game->bullets.end());
+    
+    std::cout << "removed bullet " << bullet_id << std::endl;
     break;
   }
   case MSG_ASSASSIN_CHANGE: {
@@ -654,7 +674,7 @@ void draw_ui(Color my_ui_color, playermap players,
   EndUiDrawing();
 }
 
-void draw_players(playermap players, ResourceManager *res_man, int my_id) {
+void draw_players(playermap players, std::vector<Bullet> bullets, ResourceManager *res_man, int my_id) {
   for (auto &[id, p] : players) {
     // Only skip unset players and invisible players that aren't the local player and aren't visible due to range
     if (p.username == "unset")
@@ -748,10 +768,22 @@ void draw_players(playermap players, ResourceManager *res_man, int my_id) {
           player_umbrella.is_active = true;
           player_umbrella.draw(res_man, p.x, p.y);
         } else {
+          // Draw other players' umbrellas with hit detection
+          Color umbrella_tint = WHITE;
+          for (const Bullet &b : bullets) {
+            Rectangle umbrella_rect = {(float)p.x, (float)p.y - 85, 75, 75};
+            Rectangle bullet_rect = {(float)b.x, (float)b.y, (float)b.r * 2, (float)b.r * 2};
+            if (CheckCollisionRecs(umbrella_rect, bullet_rect)) {
+              umbrella_tint = RED;
+              break;
+            }
+          }
+          
+          // Draw other players' umbrellas without state tracking
           DrawTexturePro(res_man->getTex("assets/umbrella.png"), 
                        {(float)0, (float)0, 16, 16},
                        {(float)p.x + 50, (float)p.y - 35, 75, 75},
-                       {(float)37.5, (float)60}, 0, WHITE);
+                       {(float)37.5, (float)60}, 0, umbrella_tint);
         }
         break;
       default:
@@ -988,6 +1020,9 @@ int main(int argc, char **argv) {
     // update darkness effect
     update_darkness_effect();
 
+    // update acid rain
+    acid_rain.update(GetFrameTime());
+
     // Put here to make sure id exists
     int cx = game.players[my_id].x;
     int cy = game.players[my_id].y;
@@ -1070,10 +1105,9 @@ int main(int argc, char **argv) {
       }
       
       // check charger coil 
-      if (!flashlight_usable && check_charging_station_collision(game.players[my_id].x, game.players[my_id].y)) {
+      if (check_charging_station_collision(game.players[my_id].x, game.players[my_id].y)) {
         flashlight_usable = true;
         flashlight_time_left = 15.0f;  // Reset to full battery
-        std::cout << "Flashlight recharged at charging station!" << std::endl;
       }
     }
 
@@ -1108,9 +1142,8 @@ int main(int argc, char **argv) {
         bullets_rects.push_back(Rectangle{(float)b.x, (float)b.y, (float)b.r * 2, (float)b.r * 2});
       }
 
-      umbrella_usable = player_umbrella.update(umbrella_barrel, player_rect, bullets_rects, game.players[my_id].weapon_id == Weapon::umbrella);
+      umbrella_usable = player_umbrella.update(umbrella_barrel, player_rect, bullets_rects, game.bullets, game.players[my_id].weapon_id == Weapon::umbrella);
 
-      // if the umbrella is destroyed, switch to gun a
       if (!umbrella_usable && game.players[my_id].weapon_id == Weapon::umbrella) {
         game.players[my_id].weapon_id = Weapon::gun_or_knife;
         
@@ -1147,17 +1180,34 @@ int main(int argc, char **argv) {
                        {0, 0}, 0.0f, WHITE);
       }
     }
+    // draw umbrella barrel
+    // if any player is touching the barrel, tint it green
+    Color barrel_tint = WHITE;
+    for (const auto& [_, p] : game.players) {
+        Rectangle player_rect = {(float)p.x, (float)p.y, (float)PLAYER_SIZE, (float)PLAYER_SIZE};
+        if (CheckCollisionRecs(umbrella_barrel, player_rect)) {
+            barrel_tint = GREEN;
+            break;
+        }
+    }
 
-    // Draw repair barrel
-    DrawRectangleRec(umbrella_barrel, BROWN);
+    DrawTexturePro(res_man.getTex("assets/barrel.png"),
+                   {0, 0, 16, 16},  
+                   {umbrella_barrel.x + BARREL_SIZE/2, 
+                    umbrella_barrel.y + BARREL_SIZE/2,
+                    BARREL_SIZE, 
+                    BARREL_SIZE},
+                   {0, 0}, 
+                   0.0f,   
+                   barrel_tint);
 
-    draw_players(game.players, &res_man, my_id);
+    draw_players(game.players, game.bullets, &res_man, my_id);
 
     for (Bullet &b : game.bullets)
       b.show();
 
     // Draw acid rain effect
-    acid_rain.draw();
+    acid_rain.draw(game.players);
 
     EndMode2D();
 

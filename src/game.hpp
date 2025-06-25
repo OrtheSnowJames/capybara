@@ -4,6 +4,8 @@
 #include "raylib.h"
 #include "utils.hpp"
 #include <algorithm>
+#include <vector>
+
 
 class Game {
 public:
@@ -14,14 +16,6 @@ public:
     for (Bullet &b : this->bullets) {
       b.move();
     }
-    bullets.erase(std::remove_if(bullets.begin(), bullets.end(),
-                                 [cam, my_id](const Bullet &bullet) {
-                                   return bullet.x < 0 ||
-                                          bullet.x > PLAYING_AREA.width ||
-                                          bullet.y < 0 ||
-                                          bullet.y > PLAYING_AREA.height;
-                                 }),
-                  bullets.end());
   }
 
   void update_players(int skip) {
