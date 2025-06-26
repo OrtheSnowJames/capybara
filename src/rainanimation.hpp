@@ -102,6 +102,10 @@ public:
         }
     }
 
+    bool is_active() {
+        return active;
+    }
+
 private:
     void triggerEvent() {
         // Add a burst of raindrops

@@ -16,15 +16,20 @@ class Umbrella {
 
         Umbrella() {}
         ~Umbrella() {}
+
+        void set_hit(bool hit) {
+            if (hit) {
+                tint = RED;
+            }
+        }
+
         bool update(Rectangle barrel, Rectangle player, std::vector<Rectangle> bullets, std::vector<Bullet>& game_bullets, bool is_active) {
             if (CheckCollisionRecs(barrel, player)) {
                 how_many_times_hit = 0;
                 is_usable = true;
                 hit_by_bullets.clear();
             }
-
             if (!is_active) return is_usable;
-
             // update our position (align with visual position)
             our_position = {
                 player.x,  

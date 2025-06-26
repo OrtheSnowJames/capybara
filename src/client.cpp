@@ -4,6 +4,7 @@
 #include "codes.hpp"
 #include "constants.hpp"
 #include "drawScale.hpp"
+#include "objects.hpp"
 #include "game.hpp"
 #include "game_config.hpp"
 #include "math.h"
@@ -633,6 +634,10 @@ void draw_ui(Color my_ui_color, playermap players,
     DrawCircle(map_x, map_y, 3, light_yellow);
   }
 
+  float barrel_map_x = window_size.x - 100 + ((umbrella_barrel.x + BARREL_SIZE) / (PLAYING_AREA.width / 100));
+  float barrel_map_y = (umbrella_barrel.y + BARREL_SIZE) / (PLAYING_AREA.height / 100);
+  DrawCircle(barrel_map_x, barrel_map_y, 3, BROWN);
+
   if (darkness_active) {
     if (is_assassin) {
       // Assassins see everyone normally during darkness
@@ -646,20 +651,27 @@ void draw_ui(Color my_ui_color, playermap players,
         }
       }
     } else {
-      // Non-assassins only see themselves with randomized position
-      if (players.count(my_id)) {
-        Player& local_player = players[my_id];
-        float map_x = window_size.x - 100 + (local_player.x / (PLAYING_AREA.width / 100)) + darkness_offset.x;
-        float map_y = (local_player.y / (PLAYING_AREA.height / 100)) + darkness_offset.y;
-        
-        map_x = std::max(window_size.x - 100.0f, std::min(window_size.x - 10.0f, map_x));
-        map_y = std::max(0.0f, std::min(90.0f, map_y));
-        
-        DrawRectangle(map_x, map_y, 10, 10, my_ui_color);
+      // non-assassins see themselves and players with flashlights
+      for (auto &[id, p] : players) {
+        if (id == my_id || p.weapon_id == Weapon::flashlight) {
+          Color display_color = (id == my_id) ? my_ui_color : p.color;
+          float map_x = window_size.x - 100 + (p.x / (PLAYING_AREA.width / 100));
+          float map_y = (p.y / (PLAYING_AREA.height / 100));
+          
+          if (id == my_id) {
+            map_x += darkness_offset.x;
+            map_y += darkness_offset.y;
+            
+            map_x = std::max(window_size.x - 100.0f, std::min(window_size.x - 10.0f, map_x));
+            map_y = std::max(0.0f, std::min(90.0f, map_y));
+          }
+          
+          DrawRectangle(map_x, map_y, 10, 10, display_color);
+        }
       }
     }
   } else {
-    // Normal visibility (no darkness)
+    // normal visibility (no darkness)
     for (auto &[id, p] : players) {
       if (id == my_id) {
         DrawRectangle(window_size.x - 100 + p.x / (PLAYING_AREA.width / 100),
@@ -854,15 +866,13 @@ void move_camera(Camera2D *cam, int cx, int cy) {
 }
 
 bool check_charging_station_collision(int player_x, int player_y) {
-  for (int i = 0; i < 4; i++) {
-    if (player_x < charging_points[i].x + CHARGE_SIZE && 
-        player_x + PLAYER_SIZE > charging_points[i].x &&
-        player_y < charging_points[i].y + CHARGE_SIZE && 
-        player_y + PLAYER_SIZE > charging_points[i].y) {
-      return true;
+    Rectangle player_rect = {(float)player_x, (float)player_y, (float)PLAYER_SIZE, (float)PLAYER_SIZE};
+    for (auto& obj : objects) {
+        if (obj.type == ObjectType::Charger && obj.check_collision(player_rect)) {
+            return true;
+        }
     }
-  }
-  return false;
+    return false;
 }
 
 int init_sock() {
@@ -893,22 +903,21 @@ std::string get_ip_from_args(int argc, char **argv) {
 }
 
 bool switch_weapon(Weapon weapon, Game* game, int my_id, int sock, bool flashlight_usable) {
-  if (weapon == Weapon::flashlight && !flashlight_usable) {
-    std::cout << "Flashlight is not usable (battery depleted)" << std::endl;
-    return false;
-  }
-  
-  if (game->players[my_id].weapon_id == (int)weapon) {
-    return false;
-  }
-  
-  game->players[my_id].weapon_id = (int)weapon;
-  
-  std::ostringstream msg;
-  msg << "12\n" << my_id << " " << (int)weapon;
-  send_message(msg.str(), sock);
-  
-  return true;
+    if (weapon == Weapon::flashlight && !flashlight_usable) {
+        return false;
+    }
+    
+    if (game->players[my_id].weapon_id == (int)weapon) {
+        return false;
+    }
+    
+    game->players[my_id].weapon_id = (int)weapon;
+    
+    std::ostringstream msg;
+    msg << "12\n" << my_id << " " << (int)weapon;
+    send_message(msg.str(), sock);
+    
+    return true;
 }
 
 int main(int argc, char **argv) {
@@ -1001,6 +1010,19 @@ int main(int argc, char **argv) {
   lightTex = LoadTextureFromImage(lightImg);
   UnloadImage(lightImg);
 
+  // Initialize map objects after resource manager
+  init_map_objects(
+      res_man.getTex("assets/barrel.png"),
+      res_man.getTex("assets/charger.png")
+  );
+  
+  std::cout << "Map objects initialized, count: " << objects.size() << std::endl;
+  for (const auto& obj : objects) {
+      std::cout << "Object type: " << (int)obj.type 
+                << ", Position: (" << obj.bounds.x << ", " << obj.bounds.y << ")"
+                << std::endl;
+  }
+
   while (!WindowShouldClose() && running) {
     // calculate zoom based on actual window size relative to normal window size
     float widthRatio = (float)GetScreenWidth() / window_size.x;
@@ -1083,8 +1105,8 @@ int main(int argc, char **argv) {
       Vector2 origin = {(float)game.players[my_id].x + 50,
                         (float)game.players[my_id].y + 50};
       Vector2 spawnPos = Vector2Add(origin, spawnOffset);
-      game.bullets.push_back(Bullet(spawnPos.x, spawnPos.y, dir, my_id));
 
+      // skip adding bullet locally, will be added by server
       send_message(
           std::string("10\n ").append(std::to_string(game.players[my_id].rot)),
           sock);
@@ -1113,8 +1135,6 @@ int main(int argc, char **argv) {
 
     // detect weapon switching with keyboard keys
     {
-      const int MAX_WEAPON_ID = 2;
-      
       bool weapon_changed = false;
       Weapon currentWeapon = (Weapon)game.players[my_id].weapon_id;
       
@@ -1129,7 +1149,7 @@ int main(int argc, char **argv) {
         weapon_changed = true;
       }
       
-      if (weapon_changed && currentWeapon != game.players[my_id].weapon_id) {
+      if (weapon_changed) {
         switch_weapon(currentWeapon, &game, my_id, sock, flashlight_usable);
       }
     }
@@ -1138,22 +1158,35 @@ int main(int argc, char **argv) {
     {
       Rectangle player_rect = {(float)game.players[my_id].x, (float)game.players[my_id].y, (float)PLAYER_SIZE, (float)PLAYER_SIZE};
       std::vector<Rectangle> bullets_rects;
+      std::vector<Bullet> active_bullets;
+      
       for (Bullet &b : game.bullets) {
-        bullets_rects.push_back(Rectangle{(float)b.x, (float)b.y, (float)b.r * 2, (float)b.r * 2});
+          bullets_rects.push_back(Rectangle{(float)b.x, (float)b.y, (float)b.r * 2, (float)b.r * 2});
+          active_bullets.push_back(b);
+      }
+      
+      // check if player is near barrel
+      for (auto& obj : objects) {
+          if (obj.type == ObjectType::Barrel) {
+              bool near_barrel = obj.check_collision(player_rect);
+              bool is_umbrella_equipped = game.players[my_id].weapon_id == (int)Weapon::umbrella;
+              
+              umbrella_usable = player_umbrella.update(
+                  obj.bounds,
+                  player_rect,
+                  bullets_rects,
+                  active_bullets,
+                  is_umbrella_equipped
+              );
+              
+              break;
+          }
       }
 
-      umbrella_usable = player_umbrella.update(umbrella_barrel, player_rect, bullets_rects, game.bullets, game.players[my_id].weapon_id == Weapon::umbrella);
-
-      if (!umbrella_usable && game.players[my_id].weapon_id == Weapon::umbrella) {
-        game.players[my_id].weapon_id = Weapon::gun_or_knife;
-        
-        // weapon switch message 
-        std::ostringstream msg;
-        msg << "12\n" << my_id << " " << (int)Weapon::gun_or_knife;
-        send_message(msg.str(), sock);
+      if (!umbrella_usable && game.players[my_id].weapon_id == (int)Weapon::umbrella) {
+          switch_weapon(Weapon::gun_or_knife, &game, my_id, sock, flashlight_usable);
       }
     }
-
 
     // draw to render texture
     BeginTextureMode(target);
@@ -1171,7 +1204,7 @@ int main(int argc, char **argv) {
       }
     }
 
-    // Draw charging stations
+    // draw charging stations
     for (int i = 0; i < 4; i++) {
       if (isInViewport(charging_points[i].x, charging_points[i].y, CHARGE_SIZE, CHARGE_SIZE, cam)) {
         DrawTexturePro(res_man.getTex("assets/charger.png"),
@@ -1277,6 +1310,20 @@ int main(int argc, char **argv) {
       
       EndBlendMode();
       EndTextureMode();
+    }
+
+    // show green tint on screen if acid rain is active and player doesn't have umbrella
+    if (acid_rain.is_active()) {
+        BeginTextureMode(target);
+        BeginBlendMode(BLEND_ADDITIVE);
+        
+        bool has_active_umbrella = game.players[my_id].weapon_id == (int)Weapon::umbrella && player_umbrella.is_active;
+        Color tint = has_active_umbrella ? Color{0, 0, 0, 0} : Color{0, 40, 0, 80};  // Subtle green overlay
+        
+        DrawRectangle(0, 0, window_size.x, window_size.y, tint);
+        
+        EndBlendMode();
+        EndTextureMode();
     }
 
     // Draw all HUD elements on top (after darkness effect)

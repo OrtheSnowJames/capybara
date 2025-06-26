@@ -4,6 +4,7 @@
 #include "networking.hpp"
 #include "player.hpp"
 #include "utils.hpp"
+#include "objects.hpp"
 #include <array>
 #include <cstdio>
 #include <iostream>
@@ -78,6 +79,8 @@ enum EventType {
 };
 
 static std::vector<Rectangle> bullet_colliders;
+
+std::mutex objects_mutex;
 
 void clear_assassin_state_unlocked() {
   std::cout << "Clearing assassin state" << std::endl;
@@ -190,6 +193,27 @@ void handle_client(int client, int id) {
 
   std::cout << "Client " << msg_id << " has joined.\n";
 
+  // Send current event states to the new client
+  {
+    std::scoped_lock locks(darkness_mutex, acid_rain_mutex);
+    
+    // Send darkness state if active
+    if (darkness_active) {
+      std::ostringstream event_response;
+      event_response << "11\n" << EventType::Darkness;
+      send_message(event_response.str(), client);
+      std::cout << "Sent darkness state to new client " << id << std::endl;
+    }
+    
+    // send acid rain state if active
+    if (acid_rain_active) {
+      std::ostringstream event_response;
+      event_response << "11\n" << EventType::AcidRain;
+      send_message(event_response.str(), client);
+      std::cout << "Sent acid rain state to new client " << id << std::endl;
+    }
+  }
+
   // if there's an active assassin, send the assassin event message to the new client
   {
     std::lock_guard<std::mutex> assassin_lock(assassin_mutex);
@@ -198,17 +222,6 @@ void handle_client(int client, int id) {
       event_response << "15\n" << assassin_id << " " << assassin_target_id;
       send_message(event_response.str(), client);
       std::cout << "Sent assassin state to new client " << id << std::endl;
-    }
-  }
-
-  // if there's an active darkness event, send the darkness event message to the new client
-  {
-    std::lock_guard<std::mutex> darkness_lock(darkness_mutex);
-    if (darkness_active) {
-      std::ostringstream event_response;
-      event_response << "11\n" << EventType::Darkness;
-      send_message(event_response.str(), client);
-      std::cout << "Sent darkness state to new client " << id << std::endl;
     }
   }
 
@@ -705,45 +718,129 @@ void accept_clients(int sock) {
   }
 }
 
+void init_server_objects() {
+    std::lock_guard<std::mutex> lock(objects_mutex);
+    
+    // Initialize basic map objects without textures since server doesn't render
+    const int BARREL_SIZE = 50;
+    const int BARREL_COLLISION_SIZE = BARREL_SIZE * 2;
+    
+    // Add barrel
+    objects.push_back(Object(
+        {
+            (PLAYING_AREA.width / 2) - (BARREL_COLLISION_SIZE / 2),
+            (PLAYING_AREA.height / 2) - (BARREL_COLLISION_SIZE / 2),
+            BARREL_COLLISION_SIZE,
+            BARREL_COLLISION_SIZE
+        },
+        WHITE,  // Color doesn't matter on server
+        ObjectType::Barrel
+    ));
+
+    // Add charging stations
+    const int CHARGE_SIZE = 64;
+    const int CHARGE_OFFSET = 32;
+    
+    // Add all four chargers
+    objects.push_back(Object(
+        {
+            CHARGE_OFFSET,
+            (PLAYING_AREA.height / 2) - CHARGE_OFFSET,
+            CHARGE_SIZE,
+            CHARGE_SIZE
+        },
+        WHITE,
+        ObjectType::Charger
+    ));
+
+    objects.push_back(Object(
+        {
+            PLAYING_AREA.width - CHARGE_OFFSET - CHARGE_SIZE,
+            (PLAYING_AREA.height / 2) - CHARGE_OFFSET,
+            CHARGE_SIZE,
+            CHARGE_SIZE
+        },
+        WHITE,
+        ObjectType::Charger
+    ));
+
+    objects.push_back(Object(
+        {
+            (PLAYING_AREA.width / 2) - CHARGE_OFFSET,
+            CHARGE_OFFSET,
+            CHARGE_SIZE,
+            CHARGE_SIZE
+        },
+        WHITE,
+        ObjectType::Charger
+    ));
+
+    objects.push_back(Object(
+        {
+            (PLAYING_AREA.width / 2) - CHARGE_OFFSET,
+            PLAYING_AREA.height - CHARGE_OFFSET - CHARGE_SIZE,
+            CHARGE_SIZE,
+            CHARGE_SIZE
+        },
+        WHITE,
+        ObjectType::Charger
+    ));
+}
+
 void update_bullets() {
-  std::scoped_lock locks(game_mutex, clients_mutex);
+    std::scoped_lock locks(game_mutex, clients_mutex, objects_mutex);
   
-  auto it = game.bullets.begin();
-  while (it != game.bullets.end()) {
-    bool should_despawn = false;
+    auto it = game.bullets.begin();
+    while (it != game.bullets.end()) {
+        bool should_despawn = false;
     
-    // Move bullet
-    it->move();
+        // Move bullet
+        it->move();
     
-    // Check map boundaries
-    if (it->x < 0 || it->x > PLAYING_AREA.width ||
-        it->y < 0 || it->y > PLAYING_AREA.height) {
-      should_despawn = true;
-    }
-    
-    // Check collider collisions
-    if (!should_despawn) {
-      Rectangle bullet_rect = {(float)it->x, (float)it->y, it->r * 2, it->r * 2};
-      for (const Rectangle& collider : bullet_colliders) {
-        if (CheckCollisionRecs(bullet_rect, collider)) {
-          should_despawn = true;
-          break;
+        // Check map boundaries
+        if (it->x < 0 || it->x > PLAYING_AREA.width ||
+            it->y < 0 || it->y > PLAYING_AREA.height) {
+            should_despawn = true;
         }
-      }
-    }
     
-    if (should_despawn) {
-      // Send despawn message to all clients
-      std::ostringstream msg;
-      msg << "16\n" << it->bullet_id;
-      broadcast_message(msg.str(), clients);
+        // check player collisions
+        if (!should_despawn) {
+            Rectangle bullet_rect = {(float)it->x, (float)it->y, it->r * 2, it->r * 2};
       
-      // Remove bullet
-      it = game.bullets.erase(it);
-    } else {
-      ++it;
+            for (const auto& [player_id, player] : game.players) {
+                if (player_id == it->shotby_id) continue;
+        
+                Rectangle player_rect = {(float)player.x, (float)player.y, 100, 100};
+                if (CheckCollisionRecs(bullet_rect, player_rect)) {
+                    should_despawn = true;
+                    break;
+                }
+            }
+        }
+    
+        // Check collisions with map objects
+        if (!should_despawn) {
+            Rectangle bullet_rect = {(float)it->x, (float)it->y, it->r * 2, it->r * 2};
+            for (auto& obj : objects) {
+                if (obj.check_collision(bullet_rect)) {
+                    should_despawn = true;
+                    break;
+                }
+            }
+        }
+    
+        if (should_despawn) {
+            // Send despawn message to all clients
+            std::ostringstream msg;
+            msg << "16\n" << it->bullet_id;
+            broadcast_message(msg.str(), clients);
+      
+            // Remove bullet
+            it = game.bullets.erase(it);
+        } else {
+            ++it;
+        }
     }
-  }
 }
 
 int main() {
@@ -782,6 +879,8 @@ int main() {
   std::thread(accept_clients, sock).detach();
   std::thread(event_worker).detach();
   std::thread(handle_stdin_commands).detach();
+
+  init_server_objects();
 
   std::cout << "Running.\n";
 
@@ -990,15 +1089,12 @@ int main() {
               
               std::scoped_lock locks(game_mutex, clients_mutex);
 
-              float angleRad = (-game.players[from_id].rot + 5) * DEG2RAD;
+              float angleRad = (-rot + 5) * DEG2RAD;
               float bspeed = 10;
 
-              Vector2 dir =
-                  Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -bspeed);
-              Vector2 spawnOffset =
-                  Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -120);
-              Vector2 origin = {(float)game.players[from_id].x + 50,
-                                (float)game.players[from_id].y + 50};
+              Vector2 dir = Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -bspeed);
+              Vector2 spawnOffset = Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -120);
+              Vector2 origin = {(float)game.players[from_id].x + 50, (float)game.players[from_id].y + 50};
               Vector2 spawnPos = Vector2Add(origin, spawnOffset);
               
               Bullet new_bullet((int)spawnPos.x, (int)spawnPos.y, dir, from_id);
@@ -1012,7 +1108,7 @@ int main() {
                 << (int)spawnPos.y << ' '
                 << rot;
               std::cout << j.str() << '\n';
-              broadcast_message(j.str(), clients, from_id);
+              broadcast_message(j.str(), clients);
             } break;
             case 12: { // MSG_SWITCH_WEAPON
               std::istringstream iss(payload);

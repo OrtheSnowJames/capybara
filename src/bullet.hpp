@@ -13,7 +13,8 @@ public:
 
   Bullet(int x, int y, Vector2 vel, int from_id)
       : x(x), y(y), vel(vel), shotby_id(from_id) {
-    bullet_id = next_bullet_id++;
+    bullet_id = next_bullet_id;
+    next_bullet_id = (next_bullet_id + 1) % 10000;
   }
 
   Bullet() : x(0), y(0), vel(Vector2{0, 0}), bullet_id(-1) {}
