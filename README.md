@@ -25,7 +25,7 @@ Click in the direction you want to shoot to fire a bullet. You can use the minim
 2. Compile
    ```sh
    # server
-   g++ -o bin/server src/server.cpp
+   g++ -o bin/server src/server.cpp -lraylib
 
    # client
    g++ -o bin/client src/client.cpp -lraylib

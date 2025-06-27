@@ -2,6 +2,8 @@
 #define PLAYER_H
 #include <raylib.h>
 #include <string>
+#include "netvent.hpp"
+#include "clrfn.hpp"
 
 enum Weapon {
   gun_or_knife = 0,
@@ -24,6 +26,29 @@ public:
   Player(int x, int y) : x(x), y(y), nx(x), ny(y) {}
 
   Player() : x(100), y(100), nx(100), ny(100) {};
+
+  Player(netvent::Table tbl) {
+    x = tbl[netvent::val("x")].as_int();
+    y = tbl[netvent::val("y")].as_int();
+    nx = x;
+    ny = y;
+    username = tbl[netvent::val("username")].as_string();
+    weapon_id = tbl[netvent::val("weapon_id")].as_int();
+    rot = tbl[netvent::val("rot")].as_float();
+    color = color_from_table(tbl[netvent::val("color")].as_table());
+  }
+
+  netvent::Table to_table(int id) {
+    return netvent::map_table({
+      {"id", netvent::val(id)},
+      {"x", netvent::val(this->x)},
+      {"y", netvent::val(this->y)},
+      {"username", netvent::val(this->username)},
+      {"weapon_id", netvent::val(this->weapon_id)},
+      {"rot", netvent::val(this->rot)},
+      {"color", netvent::val(color_to_table(this->color))}
+    });
+  }
 
   bool move() {
     bool out = IsKeyDown(KEY_W) || IsKeyDown(KEY_A) || IsKeyDown(KEY_S) ||
