@@ -9,6 +9,7 @@
 #include "networking.hpp"
 #include "objects.hpp"
 #include "player.hpp"
+#include "collision.hpp"
 #include "rainanimation.hpp"
 #include "raylib.h"
 #include "raymath.h"
@@ -92,6 +93,12 @@ static Rectangle umbrella_barrel = {
     BARREL_COLLISION_SIZE,
     BARREL_COLLISION_SIZE}; // middle of the playing field
 
+// cubes
+std::vector<Object> cubes;
+
+// move state
+CanMoveState can_move_state = {false, false, false, false};
+
 void do_recv() {
   char buffer[1024];
 
@@ -132,7 +139,7 @@ enum EventType {
 };
 
 void handle_packet(int packet_type, std::string payload, Game *game,
-                   int *my_id) {
+                   int *my_id, ResourceManager *res_man) {
   std::istringstream in(payload);
   std::vector<std::string> msg_split;
 
@@ -147,6 +154,7 @@ void handle_packet(int packet_type, std::string payload, Game *game,
         auto player = Player(value.as_table());
         (*game).players[player_id] = player;
       }
+      cubes = objects_from_table(data["cubes"].as_table(), res_man->getTex("assets/cube.png"));
       int current_event = data["current_event"].as_int();
       if (current_event == EventType::Darkness) {
         darkness_active = true;
@@ -374,7 +382,16 @@ void handle_packet(int packet_type, std::string payload, Game *game,
   }
 }
 
-void handle_packets(Game *game, int *my_id) {
+void cube_loop(std::vector<Object> cubes, Camera2D cam, ResourceManager *res_man) {
+  for (Object& cube : cubes) {
+    if (isInViewport(cube.bounds.x, cube.bounds.y, cube.bounds.width, cube.bounds.height, cam)) {
+      cube.draw();
+    }
+  }
+}
+
+
+void handle_packets(Game *game, int *my_id, ResourceManager *res_man) {
   std::lock_guard<std::mutex> lock(packets_mutex);
   while (!packets.empty()) {
     std::string packet = packets.front();
@@ -388,7 +405,7 @@ void handle_packets(Game *game, int *my_id) {
 
     int packet_type = std::stoi(packet.substr(0, newline_pos));
 
-    handle_packet(packet_type, packet, game, my_id);
+    handle_packet(packet_type, packet, game, my_id, res_man);
   }
 }
 
@@ -1073,7 +1090,7 @@ int main(int argc, char **argv) {
     float heightRatio = (float)GetScreenHeight() / window_size.y;
     float scale = (widthRatio < heightRatio) ? widthRatio : heightRatio;
 
-    handle_packets(&game, &my_id);
+    handle_packets(&game, &my_id, &res_man);
 
     if (my_id == -1) {
       BeginDrawing();
@@ -1104,7 +1121,9 @@ int main(int argc, char **argv) {
 
     server_update_counter++;
 
-    bool moved = game.players.at(my_id).move();
+    can_move_state = update_can_move_state(Rectangle{(float)game.players.at(my_id).x, (float)game.players.at(my_id).y, (float)PLAYER_SIZE, (float)PLAYER_SIZE}, cubes, PLAYER_SIZE, 0.1f, Rectangle{0, 0, (float)PLAYING_AREA.width, (float)PLAYING_AREA.height});
+
+    bool moved = game.players.at(my_id).move(can_move_state);
 
     float scaledWidth = window_size.x * scale;
     float scaledHeight = window_size.y * scale;
@@ -1273,6 +1292,10 @@ int main(int argc, char **argv) {
                        {0, 0}, 0.0f, WHITE);
       }
     }
+
+    // draw cubes
+    cube_loop(cubes, cam, &res_man);
+
     // draw umbrella barrel
     // if any player is touching the barrel, tint it green
     Color barrel_tint = WHITE;

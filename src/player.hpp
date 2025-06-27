@@ -5,6 +5,7 @@
 #include <string>
 #include "netvent.hpp"
 #include "clrfn.hpp"
+#include "collision.hpp"
 
 enum Weapon {
   gun_or_knife = 0,
@@ -52,19 +53,19 @@ public:
     });
   }
 
-  bool move() {
+  bool move(CanMoveState can_move_state) {
     bool out = IsKeyDown(KEY_W) || IsKeyDown(KEY_A) || IsKeyDown(KEY_S) ||
                IsKeyDown(KEY_D);
     int dir_x = 0;
     int dir_y = 0;
 
-    if (IsKeyDown(KEY_W))
+    if (IsKeyDown(KEY_W) && can_move_state.up)
       dir_y -= speed;
-    if (IsKeyDown(KEY_S))
+    if (IsKeyDown(KEY_S) && can_move_state.down)
       dir_y += speed;
-    if (IsKeyDown(KEY_A))
+    if (IsKeyDown(KEY_A) && can_move_state.left)
       dir_x -= speed;
-    if (IsKeyDown(KEY_D))
+    if (IsKeyDown(KEY_D) && can_move_state.right)
       dir_x += speed;
 
     // Check boundaries before moving

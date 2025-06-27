@@ -80,6 +80,9 @@ std::map<int, std::chrono::steady_clock::time_point> pending_assassins;
 
 std::set<int> previous_targets; // previous targets
 
+// cubes on the map
+std::vector<Object> cubes = get_rand_cubes(155, 50);
+//std::vector<Object> cubes;
 // Lock order: game_mutex -> assassin_mutex -> pending_assassin_mutex ->
 // darkness_mutex -> acid_rain_mutex -> clients_mutex This order must be
 // maintained in all functions to prevent deadlocks
@@ -218,6 +221,7 @@ void handle_client(int client, int id) {
           {"players", netvent::val(players_table)},
           {"current_event", netvent::val(current_event)},
           {"assassin_id", netvent::val(assassin_id)},
+          {"cubes", netvent::val(objects_to_table(cubes))}
       };
 
       lod = netvent::serialize_to_netvent(netvent::val(0 /* MSG_GAME_STATE */),
@@ -867,6 +871,13 @@ void update_bullets() {
                                it->r * 2};
       for (auto &obj : objects) {
         if (obj.check_collision(bullet_rect)) {
+          should_despawn = true;
+          break;
+        }
+      }
+
+      for (auto &cube : cubes) {
+        if (cube.check_collision(bullet_rect)) {
           should_despawn = true;
           break;
         }
