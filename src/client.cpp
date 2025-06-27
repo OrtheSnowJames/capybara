@@ -147,8 +147,21 @@ void handle_packet(int packet_type, std::string payload, Game *game,
         auto player = Player(value.as_table());
         (*game).players[player_id] = player;
       }
+      int current_event = data["current_event"].as_int();
+      if (current_event == EventType::Darkness) {
+        darkness_active = true;
+      } else if (current_event == EventType::AcidRain) {
+        acid_rain.start(0.0f);
+      } else if (current_event == EventType::Assasin) {
+        int assassin_id = data["assassin_id"].as_int();
+        game->players[assassin_id].color = INVISIBLE;
+        if (assassin_id == *my_id) {
+          is_assassin = true;
+          my_target_id = data["target_id"].as_int();
+        }
+      }
+      break;
     }
-    break;
   }
   case MSG_CLIENT_ID: {
     auto [event_name, data] = netvent::deserialize_from_netvent(payload);
@@ -214,22 +227,27 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     if (event_name.as_int() == MSG_EVENT_SUMMON) {
       int event_type = data["event_type"].as_int();
 
-      if (event_type == Darkness) {
-        std::cout << "Received darkness event: " << payload << std::endl;
-        darkness_active = true;
-        darkness_offset = {0, 0};
-        last_darkness_update = std::chrono::steady_clock::now();
-      } else if (event_type == Assasin) {
-        std::cout << "Received assasin event: " << payload << std::endl;
-      } else if (event_type == AcidRain) {
-        std::cout << "Received acid rain event: " << payload << std::endl;
-        acid_rain.start(0.0f);
-      } else if (event_type == Clear) {
-        std::cout << "Received clear event: " << payload << std::endl;
+      std::cout << "Received event type: " << event_type << std::endl;
 
-        // clear all events
-        darkness_active = false;
-        acid_rain.stop();
+      switch (event_type) {
+        case Darkness:
+          std::cout << "Received darkness event: " << payload << std::endl;
+          darkness_active = true;
+          darkness_offset = {0, 0};
+          last_darkness_update = std::chrono::steady_clock::now();
+          break;
+        case Assasin:
+          std::cout << "Received assasin event: " << payload << std::endl;
+          break;
+        case AcidRain:
+          std::cout << "Received acid rain event: " << payload << std::endl;
+          acid_rain.start(0.0f);
+          break;
+        case Clear:
+          std::cout << "Received clear event: " << payload << std::endl;
+          darkness_active = false;
+          acid_rain.stop();
+          break;
       }
     }
     break;
@@ -1266,6 +1284,14 @@ int main(int argc, char **argv) {
         break;
       }
     }
+
+    Color shadow_color = {0, 0, 0, 80};
+    float shadow_width = 80;
+    float shadow_height = 30;
+    float shadow_y_offset = 30;
+    DrawEllipse(umbrella_barrel.x + BARREL_SIZE, 
+                umbrella_barrel.y + BARREL_COLLISION_SIZE - shadow_y_offset,
+                shadow_width/2, shadow_height/2, shadow_color);
 
     DrawTexturePro(res_man.getTex("assets/barrel.png"), {0, 0, 16, 16},
                    {umbrella_barrel.x + BARREL_SIZE / 2,

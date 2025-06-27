@@ -204,8 +204,21 @@ void handle_client(int client, int id) {
         players_table.push_back(netvent::val(k), v.to_table(k));
       }
 
+      EventType current_event = EventType::NOTHING;
+      bool assassin_active = assassin_id != -1;
+      if (darkness_active) {
+        current_event = EventType::Darkness;
+      } else if (acid_rain_active) {
+        current_event = EventType::AcidRain;
+      } else if (assassin_active) {
+        current_event = EventType::Assasin;
+      } 
+
       std::map<std::string, netvent::Value> data = {
-          {"players", netvent::val(players_table)}};
+          {"players", netvent::val(players_table)},
+          {"current_event", netvent::val(current_event)},
+          {"assassin_id", netvent::val(assassin_id)},
+      };
 
       lod = netvent::serialize_to_netvent(netvent::val(0 /* MSG_GAME_STATE */),
                                           data);
@@ -437,12 +450,16 @@ void select_new_target(int assassin_id, bool is_initial_target) {
     assassin_target_id = new_target_id;
 
     // send assassin event message
-    std::ostringstream event_response;
-    event_response << "15\n" << assassin_id << " " << assassin_target_id;
+    std::string event_response = netvent::serialize_to_netvent(
+        netvent::val(MSG_ASSASSIN_CHANGE),
+        std::map<std::string, netvent::Value>({
+            {"assassin_id", netvent::val(assassin_id)},
+            {"target_id", netvent::val(assassin_target_id)}
+        }));
 
     auto assassin_client = clients.find(assassin_id);
     if (assassin_client != clients.end()) {
-      send_message(event_response.str(), assassin_client->second.first);
+      send_message(event_response, assassin_client->second.first);
       if (is_initial_target) {
         std::cout << "New assassin " << assassin_id
                   << " assigned initial target " << assassin_target_id
@@ -500,12 +517,9 @@ void make_player_assassin(int target_id) {
   }
 
   // send the color change message
-  std::ostringstream response;
-  response << "5\n" // MSG_PLAYER_UPDATE
-           << target_id << " " << game.players.at(target_id).username << " "
-           << color_to_uint(INVISIBLE);
+  std::string res = netvent::serialize_to_netvent(netvent::val(MSG_PLAYER_UPDATE), std::map<std::string, netvent::Value>({{"id", netvent::val(target_id)}, {"username", netvent::val(game.players.at(target_id).username)}, {"color", netvent::val(color_to_table(INVISIBLE))}}));
 
-  broadcast_message(response.str(), clients);
+  broadcast_message(res, clients);
 }
 
 void summon_event(int delay, EventType event_type = EventType::NOTHING) {
@@ -524,9 +538,8 @@ void summon_event(int delay, EventType event_type = EventType::NOTHING) {
       darkness_start_time = std::chrono::steady_clock::now();
 
       // send a message to all clients to start the darkness event
-      std::ostringstream event_response;
-      event_response << "11\n" << EventType::Darkness;
-      broadcast_message(event_response.str(), clients);
+      std::string res = netvent::serialize_to_netvent(netvent::val(MSG_EVENT_SUMMON), std::map<std::string, netvent::Value>({{"event_type", netvent::val(EventType::Darkness)}}));
+      broadcast_message(res, clients);
 
       std::cout << "Darkness event started" << std::endl;
     }
@@ -585,9 +598,8 @@ void summon_event(int delay, EventType event_type = EventType::NOTHING) {
       acid_rain_start_time = std::chrono::steady_clock::now();
 
       // send a message to all clients to start the acid rain event
-      std::ostringstream event_response;
-      event_response << "11\n" << EventType::AcidRain;
-      broadcast_message(event_response.str(), clients);
+      std::string res = netvent::serialize_to_netvent(netvent::val(MSG_EVENT_SUMMON), std::map<std::string, netvent::Value>({{"event_type", netvent::val(EventType::AcidRain)}}));
+      broadcast_message(res, clients);
     }
     break;
   }
@@ -627,9 +639,8 @@ void check_pending_assassins() {
         darkness_active = false;
 
         // send clear event message to all clients
-        std::ostringstream clear_response;
-        clear_response << "11\n" << EventType::Clear;
-        broadcast_message(clear_response.str(), clients);
+        std::string res = netvent::serialize_to_netvent(netvent::val(MSG_EVENT_SUMMON), std::map<std::string, netvent::Value>({{"event_type", netvent::val(EventType::Clear)}}));
+        broadcast_message(res, clients);
 
         std::cout << "Darkness event ended after 60 seconds" << std::endl;
       }
@@ -650,9 +661,8 @@ void check_pending_assassins() {
         acid_rain_active = false;
 
         // send clear event message to all clients
-        std::ostringstream clear_response;
-        clear_response << "11\n" << EventType::Clear;
-        broadcast_message(clear_response.str(), clients);
+        std::string res = netvent::serialize_to_netvent(netvent::val(MSG_EVENT_SUMMON), std::map<std::string, netvent::Value>({{"event_type", netvent::val(EventType::Clear)}}));
+        broadcast_message(res, clients);
 
         std::cout << "Acid rain event ended after 60 seconds" << std::endl;
       }
@@ -671,12 +681,9 @@ void check_pending_assassins() {
       if (game.players.count(assassin_id)) {
         game.players.at(assassin_id).color = original_assassin_color;
 
-        std::ostringstream response;
-        response << "5\n" // MSG_PLAYER_UPDATE
-                 << assassin_id << " " << game.players.at(assassin_id).username
-                 << " " << color_to_uint(original_assassin_color);
+        std::string res = netvent::serialize_to_netvent(netvent::val(MSG_PLAYER_UPDATE), std::map<std::string, netvent::Value>({{"id", netvent::val(assassin_id)}, {"username", netvent::val(game.players.at(assassin_id).username)}, {"color", netvent::val(color_to_table(original_assassin_color))}}));
 
-        broadcast_message(response.str(), clients);
+        broadcast_message(res, clients);
       }
       clear_assassin_state_unlocked();
       return;
@@ -1073,14 +1080,16 @@ int main() {
                         std::chrono::steady_clock::now();
 
                     // Notify assassin of self-targeting
-                    std::ostringstream event_response;
-                    event_response << "15\n"
-                                   << current_assassin_id << " "
-                                   << current_assassin_id;
+                    std::string event_response = netvent::serialize_to_netvent(
+                        netvent::val(MSG_ASSASSIN_CHANGE),
+                        std::map<std::string, netvent::Value>({
+                            {"assassin_id", netvent::val(current_assassin_id)},
+                            {"target_id", netvent::val(current_assassin_id)}
+                        }));
 
                     auto assassin_client = clients.find(current_assassin_id);
                     if (assassin_client != clients.end()) {
-                      send_message(event_response.str(),
+                      send_message(event_response,
                                    assassin_client->second.first);
                       std::cout << "Assassin " << current_assassin_id
                                 << " entering pending period (self-target)"
