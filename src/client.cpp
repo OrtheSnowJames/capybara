@@ -701,6 +701,12 @@ void draw_players(playermap players, std::vector<Bullet> bullets,
       continue;
 
     if (!color_equal(p.color, INVISIBLE) || id == my_id) {
+      Color shadow_color = {0, 0, 0, 80};
+      float shadow_width = 80;
+      float shadow_height = 30;
+      float shadow_y_offset = 90;
+      DrawEllipse(p.x + 50, p.y + shadow_y_offset, shadow_width/2, shadow_height/2, shadow_color);
+
       Color clr = p.color;
       if (id == my_id && is_assassin) {
         DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color),
