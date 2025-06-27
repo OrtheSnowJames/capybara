@@ -22,6 +22,13 @@ const Color INVISIBLE = BLANK;
 typedef std::map<int, Player> playermap;
 typedef std::pair<int, std::shared_ptr<std::thread>> client;
 
+inline bool operator<(const Color& a, const Color& b) {
+    if (a.r != b.r) return a.r < b.r;
+    if (a.g != b.g) return a.g < b.g;
+    if (a.b != b.b) return a.b < b.b;
+    return a.a < b.a;
+}
+
 inline bool isInViewport(int x, int y, int width, int height, Camera2D cam) {
   Rectangle viewport = {cam.target.x - cam.offset.x / cam.zoom,
                         cam.target.y - cam.offset.y / cam.zoom,

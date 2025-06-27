@@ -285,15 +285,11 @@ void handle_packet(int packet_type, std::string payload, Game *game,
 
       Vector2 dir = Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -bspeed);
 
-      std::cout << from_id << ' ' << x << ' ' << y << ' ' << ' ' << dir.x << ' '
-                << dir.y << std::endl;
+      std::cout << "Client: Received bullet " << bullet_id << " from player " << from_id 
+                << " at (" << x << ", " << y << ")" << std::endl;
 
-      Bullet new_bullet(x, y, dir, from_id);
-      new_bullet.bullet_id = bullet_id;
+      Bullet new_bullet(x, y, dir, from_id, bullet_id);
       game->bullets.push_back(new_bullet);
-
-      std::cout << "added bullet " << bullet_id << " at " << x << ' ' << y
-                << " with dir " << dir.x << ' ' << dir.y << std::endl;
     }
     break;
   }
@@ -302,14 +298,20 @@ void handle_packet(int packet_type, std::string payload, Game *game,
     if (event_name.as_int() == MSG_BULLET_DESPAWN) {
       int bullet_id = data["bullet_id"].as_int();
 
+      size_t before_size = game->bullets.size();
       game->bullets.erase(std::remove_if(game->bullets.begin(),
                                          game->bullets.end(),
                                          [bullet_id](const Bullet &b) {
                                            return b.bullet_id == bullet_id;
                                          }),
                           game->bullets.end());
+      size_t after_size = game->bullets.size();
 
-      std::cout << "removed bullet " << bullet_id << std::endl;
+      if (before_size != after_size) {
+        std::cout << "Client: Removed bullet " << bullet_id << std::endl;
+      } else {
+        std::cout << "Client: Warning - Tried to remove non-existent bullet " << bullet_id << std::endl;
+      }
     }
     break;
   }
@@ -367,9 +369,8 @@ void handle_packets(Game *game, int *my_id) {
     }
 
     int packet_type = std::stoi(packet.substr(0, newline_pos));
-    std::string payload = packet.substr(newline_pos + 1);
 
-    handle_packet(packet_type, payload, game, my_id);
+    handle_packet(packet_type, packet, game, my_id);
   }
 }
 
@@ -1128,13 +1129,12 @@ int main(int argc, char **argv) {
                         (float)game.players[my_id].y + 50};
       Vector2 spawnPos = Vector2Add(origin, spawnOffset);
 
-      // skip adding bullet locally, will be added by server
+      // Send bullet shot message to server - server will assign ID
       send_message(
           netvent::serialize_to_netvent(
               netvent::val((int)MSG_BULLET_SHOT),
               std::map<std::string, netvent::Value>(
                   {{"player_id", netvent::val(my_id)},
-                   {"bullet_id", netvent::val((int)game.bullets.size() + 1)},
                    {"x", netvent::val((int)spawnPos.x)},
                    {"y", netvent::val((int)spawnPos.y)},
                    {"rot", netvent::val(game.players[my_id].rot)}})),

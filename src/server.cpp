@@ -34,6 +34,17 @@ std::atomic<bool> server_running{true};
 std::mutex game_mutex;
 Game game;
 
+// bullet id 
+static std::atomic<int> next_bullet_id{0};
+std::mutex bullet_id_mutex;
+
+int get_next_bullet_id() {
+    std::lock_guard<std::mutex> lock(bullet_id_mutex);
+    int id = next_bullet_id++;
+    if (next_bullet_id >= 10000) next_bullet_id = 0;
+    return id;
+}
+
 std::mutex assassin_mutex;
 int assassin_id = -1;
 int assassin_target_id = -1; // target id
@@ -857,9 +868,12 @@ void update_bullets() {
 
     if (should_despawn) {
       // Send despawn message to all clients
-      std::ostringstream msg;
-      msg << "16\n" << it->bullet_id;
-      broadcast_message(msg.str(), clients);
+      std::string msg = netvent::serialize_to_netvent(
+          netvent::val(MSG_BULLET_DESPAWN),
+          std::map<std::string, netvent::Value>({
+              {"bullet_id", netvent::val(it->bullet_id)}
+          }));
+      broadcast_message(msg, clients);
 
       // Remove bullet
       it = game.bullets.erase(it);
@@ -994,7 +1008,7 @@ int main() {
               continue;
 
             int packet_type = std::stoi(packet.substr(0, packet.find('\n')));
-            std::string payload = packet.substr(packet.find('\n') + 1);
+            std::string payload = packet; // if we substr the newline, the processing will break
 
             switch (packet_type) {
             case 2: {
@@ -1141,7 +1155,6 @@ int main() {
                   netvent::deserialize_from_netvent(payload);
               if (event_name.as_int() == 10) {
                 int player_id = data["player_id"].as_int();
-                int bullet_id = data["bullet_id"].as_int();
                 int x = data["x"].as_int();
                 int y = data["y"].as_int();
                 float rot = data["rot"].as_float();
@@ -1151,16 +1164,14 @@ int main() {
                 float angleRad = (-rot + 5) * DEG2RAD;
                 float bspeed = 10;
 
-                Vector2 dir =
-                    Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -bspeed);
-                Vector2 spawnOffset =
-                    Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -120);
+                Vector2 dir = Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -bspeed);
+                Vector2 spawnOffset = Vector2Scale({cosf(angleRad), -sinf(angleRad)}, -120);
                 Vector2 origin = {(float)game.players[from_id].x + 50,
                                   (float)game.players[from_id].y + 50};
                 Vector2 spawnPos = Vector2Add(origin, spawnOffset);
 
-                Bullet new_bullet((int)spawnPos.x, (int)spawnPos.y, dir,
-                                  from_id);
+                int bullet_id = get_next_bullet_id();
+                Bullet new_bullet((int)spawnPos.x, (int)spawnPos.y, dir, from_id, bullet_id);
                 game.bullets.push_back(new_bullet);
 
                 std::string out = netvent::serialize_to_netvent(

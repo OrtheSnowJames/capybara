@@ -93,7 +93,7 @@ class Table {
         }
 
         void push_back(const Value& key, const Value& value) {
-            if (!is_array) throw std::runtime_error("Table is not an array");
+            if (is_array) throw std::runtime_error("Table is not an array");
             data[Value(key)] = value;
         }
 

@@ -1,6 +1,7 @@
 #ifndef PLAYER_H
 #define PLAYER_H
 #include <raylib.h>
+#include <iostream>
 #include <string>
 #include "netvent.hpp"
 #include "clrfn.hpp"
@@ -28,6 +29,7 @@ public:
   Player() : x(100), y(100), nx(100), ny(100) {};
 
   Player(netvent::Table tbl) {
+    std::cout << "Player(netvent::Table tbl)" << std::endl;
     x = tbl[netvent::val("x")].as_int();
     y = tbl[netvent::val("y")].as_int();
     nx = x;
