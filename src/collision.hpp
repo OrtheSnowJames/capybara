@@ -52,14 +52,13 @@ inline CanMoveState update_can_move_state(Rectangle player, std::vector<Object> 
     if (player.y + PLAYER_SIZE + move_amount > playing_area.y + playing_area.height) {
         new_can_move_state.down = false;
     }
-
-    // TEMPORARILY DISABLED: This might be causing collision issues
-    // if (!new_can_move_state.up && !new_can_move_state.down && !new_can_move_state.left && !new_can_move_state.right) {
-    //     new_can_move_state.up = true;
-    //     new_can_move_state.down = true;
-    //     new_can_move_state.left = true;
-    //     new_can_move_state.right = true;
-    // }
+    
+    if (!new_can_move_state.up && !new_can_move_state.down && !new_can_move_state.left && !new_can_move_state.right) {
+        new_can_move_state.up = true;
+        new_can_move_state.down = true;
+        new_can_move_state.left = true;
+        new_can_move_state.right = true;
+    }
     
     return new_can_move_state;
 }

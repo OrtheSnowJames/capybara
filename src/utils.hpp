@@ -29,11 +29,13 @@ inline bool operator<(const Color& a, const Color& b) {
     return a.a < b.a;
 }
 
-inline bool isInViewport(int x, int y, int width, int height, Camera2D cam) {
-  Rectangle viewport = {cam.target.x - cam.offset.x / cam.zoom,
-                        cam.target.y - cam.offset.y / cam.zoom,
-                        window_size.x / cam.zoom,
-                        window_size.y / cam.zoom};
+
+
+inline bool isInViewport(int x, int y, int width, int height, Camera2D cam, int margin = 0) {
+  Rectangle viewport = {cam.target.x - cam.offset.x / cam.zoom - margin,
+                        cam.target.y - cam.offset.y / cam.zoom - margin,
+                        window_size.x / cam.zoom + (margin * 2),
+                        window_size.y / cam.zoom + (margin * 2)};
 
   return CheckCollisionRecs({(float)x, (float)y, (float)width, (float)height},
                             viewport);

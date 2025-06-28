@@ -384,7 +384,7 @@ void handle_packet(int packet_type, std::string payload, Game *game,
 
 void cube_loop(std::vector<Object> cubes, Camera2D cam, ResourceManager *res_man) {
   for (Object& cube : cubes) {
-    if (isInViewport(cube.bounds.x, cube.bounds.y, cube.bounds.width, cube.bounds.height, cam)) {
+    if (isInViewport(cube.bounds.x, cube.bounds.y, cube.bounds.width, cube.bounds.height, cam, 100)) {
       cube.draw();
     }
   }
@@ -547,6 +547,60 @@ void update_darkness_effect() {
     darkness_offset.y = dis(gen);
     last_darkness_update = current_time;
   }
+}
+
+// Helper function to check ray-rectangle intersection and return distance
+float check_ray_cube_intersection(Vector2 start, Vector2 direction, float max_distance, const std::vector<Object>& cubes) {
+  float closest_distance = max_distance;
+  
+  for (const auto& cube : cubes) {
+    if (cube.type != ObjectType::Cube) continue;
+    
+    // Check intersection with cube bounds
+    Rectangle cube_rect = cube.bounds;
+    
+    float t_min = 0.0f;
+    float t_max = max_distance;
+    
+    // Check X boundaries
+    if (fabs(direction.x) > 0.001f) {
+      float t1 = (cube_rect.x - start.x) / direction.x;
+      float t2 = (cube_rect.x + cube_rect.width - start.x) / direction.x;
+      
+      if (t1 > t2) std::swap(t1, t2);
+      
+      t_min = std::max(t_min, t1);
+      t_max = std::min(t_max, t2);
+    } else {
+      // Ray is parallel to X boundaries
+      if (start.x < cube_rect.x || start.x > cube_rect.x + cube_rect.width) {
+        continue; // No intersection possible
+      }
+    }
+    
+    // Check Y boundaries
+    if (fabs(direction.y) > 0.001f) {
+      float t1 = (cube_rect.y - start.y) / direction.y;
+      float t2 = (cube_rect.y + cube_rect.height - start.y) / direction.y;
+      
+      if (t1 > t2) std::swap(t1, t2);
+      
+      t_min = std::max(t_min, t1);
+      t_max = std::min(t_max, t2);
+    } else {
+      // Ray is parallel to Y boundaries
+      if (start.y < cube_rect.y || start.y > cube_rect.y + cube_rect.height) {
+        continue; // No intersection possible
+      }
+    }
+    
+    // Check if intersection exists and is valid
+    if (t_min <= t_max && t_min > 0.0f && t_min < closest_distance) {
+      closest_distance = t_min;
+    }
+  }
+  
+  return closest_distance;
 }
 
 void draw_flashlight_cone(Vector2 playerScreenPos, float player_rotation) {
@@ -1037,6 +1091,8 @@ int main(int argc, char **argv) {
   cam.offset = Vector2{window_size.x / 2.0f, window_size.y / 2.0f};
   // create render texture to draw game at normal res
   RenderTexture2D target = LoadRenderTexture(window_size.x, window_size.y);
+  // create shadow mask texture
+  RenderTexture2D shadowMask = LoadRenderTexture(window_size.x, window_size.y);
   // Create light texture for darkness effect once
   Texture2D lightTex = {0};
   {
@@ -1359,23 +1415,30 @@ int main(int argc, char **argv) {
 
           float spread_angle = 15.0f * DEG2RAD; // Narrower beam
 
+          Vector2 playerWorldPos = GetScreenToWorld2D(playerScreenPos, cam);
+
           for (int i = 0; i < 4; i++) {
             float current_spread =
                 spread_angle *
                 (1.0f - (float)i / 4.0f); // Narrower spread for inner beams
             float alpha = 180 - (i * 40); // Brighter in the center
 
+            // Calculate ray directions for left and right edges of the beam
+            Vector2 left_direction = {cosf(angleRad - current_spread), -sinf(angleRad - current_spread)};
+            Vector2 right_direction = {cosf(angleRad + current_spread), -sinf(angleRad + current_spread)};
+            
+            // Check for cube intersections and limit beam distance
+            float left_distance = check_ray_cube_intersection(playerWorldPos, left_direction, flashlight_distance, cubes);
+            float right_distance = check_ray_cube_intersection(playerWorldPos, right_direction, flashlight_distance, cubes);
+            
+            // Convert back to screen coordinates
             Vector2 beam_left = {
-                playerScreenPos.x +
-                    cosf(angleRad - current_spread) * flashlight_distance,
-                playerScreenPos.y -
-                    sinf(angleRad - current_spread) * flashlight_distance};
+                playerScreenPos.x + cosf(angleRad - current_spread) * left_distance,
+                playerScreenPos.y - sinf(angleRad - current_spread) * left_distance};
 
             Vector2 beam_right = {
-                playerScreenPos.x +
-                    cosf(angleRad + current_spread) * flashlight_distance,
-                playerScreenPos.y -
-                    sinf(angleRad + current_spread) * flashlight_distance};
+                playerScreenPos.x + cosf(angleRad + current_spread) * right_distance,
+                playerScreenPos.y - sinf(angleRad + current_spread) * right_distance};
 
             // Draw layered beams
             Color beam_color = {255, 255, 255, (unsigned char)alpha};
@@ -1430,6 +1493,12 @@ int main(int argc, char **argv) {
             cam, scale);
     EndTextureMode();
 
+    // Apply shadow casting (line of sight) effect
+    BeginTextureMode(shadowMask);
+    ClearBackground(WHITE); // Start with everything visible
+    
+    EndTextureMode();
+
     // draw the scaled render texture to the window
     BeginDrawing();
     ClearBackground(BLACK);
@@ -1445,6 +1514,7 @@ int main(int argc, char **argv) {
 
   // Cleanup
   UnloadRenderTexture(target);
+  UnloadRenderTexture(shadowMask);
   UnloadRenderTexture(darknessMask);
   if (lightTex.id != 0) {
     UnloadTexture(lightTex);
