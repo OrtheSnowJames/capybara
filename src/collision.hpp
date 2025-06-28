@@ -19,7 +19,7 @@ inline CanMoveState update_can_move_state(Rectangle player, std::vector<Object> 
     
     // Check cube collisions
     for (auto &cube : cubes) {
-        Rectangle cube_correct_bounds = {cube.bounds.x, cube.bounds.y - cube.bounds.height /2, cube.bounds.width, cube.bounds.height};
+        const Rectangle cube_correct_bounds = {cube.bounds.x, cube.bounds.y, cube.bounds.height, cube.bounds.height};
 
         // up
         if (CheckCollisionRecs(Rectangle{player.x, player.y - move_amount, (float)PLAYER_SIZE, (float)PLAYER_SIZE}, cube_correct_bounds)) {
@@ -53,13 +53,13 @@ inline CanMoveState update_can_move_state(Rectangle player, std::vector<Object> 
         new_can_move_state.down = false;
     }
 
-    // if the player is stuck, move them in a random direction
-    if (!new_can_move_state.up && !new_can_move_state.down && !new_can_move_state.left && !new_can_move_state.right) {
-        new_can_move_state.up = true;
-        new_can_move_state.down = true;
-        new_can_move_state.left = true;
-        new_can_move_state.right = true;
-    }
+    // TEMPORARILY DISABLED: This might be causing collision issues
+    // if (!new_can_move_state.up && !new_can_move_state.down && !new_can_move_state.left && !new_can_move_state.right) {
+    //     new_can_move_state.up = true;
+    //     new_can_move_state.down = true;
+    //     new_can_move_state.left = true;
+    //     new_can_move_state.right = true;
+    // }
     
     return new_can_move_state;
 }

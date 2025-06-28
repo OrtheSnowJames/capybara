@@ -65,7 +65,7 @@ class Object {
                     DrawTexturePro(
                         texture,
                         {0, 0, 16, 16},
-                        bounds,
+                        {bounds.x + bounds.width/2 - 7, bounds.y + bounds.height/2, bounds.width, bounds.height},
                         {0, 0},
                         0.0f,
                         tint);
