@@ -81,7 +81,7 @@ std::map<int, std::chrono::steady_clock::time_point> pending_assassins;
 std::set<int> previous_targets; // previous targets
 
 // cubes on the map
-std::vector<Object> cubes = get_rand_cubes(155, 50);
+std::vector<Object> cubes = get_rand_cubes(155, CUBE_SIZE);
 //std::vector<Object> cubes;
 // Lock order: game_mutex -> assassin_mutex -> pending_assassin_mutex ->
 // darkness_mutex -> acid_rain_mutex -> clients_mutex This order must be

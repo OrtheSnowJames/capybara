@@ -150,13 +150,6 @@ inline void split(std::string str, std::string splitBy,
   }
 }
 
-inline int random_int(int min, int max) {
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::uniform_int_distribution<> dis(min, max);
-  return dis(gen);
-}
-
 inline std::string sanitize_username(std::string str) {
   // Remove non-alphabetic characters
   str.erase(std::remove_if(str.begin(), str.end(),

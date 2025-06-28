@@ -19,7 +19,8 @@ inline CanMoveState update_can_move_state(Rectangle player, std::vector<Object> 
     
     // Check cube collisions
     for (auto &cube : cubes) {
-        Rectangle cube_correct_bounds = {cube.bounds.x, cube.bounds.y - cube.bounds.height, cube.bounds.width, cube.bounds.height};
+        Rectangle cube_correct_bounds = {cube.bounds.x, cube.bounds.y - cube.bounds.height /2, cube.bounds.width, cube.bounds.height};
+
         // up
         if (CheckCollisionRecs(Rectangle{player.x, player.y - move_amount, (float)PLAYER_SIZE, (float)PLAYER_SIZE}, cube_correct_bounds)) {
             new_can_move_state.up = false;

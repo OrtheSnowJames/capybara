@@ -2,7 +2,10 @@
 
 #include <raylib.h>
 #include <vector>
+#include <random>
 #include "constants.hpp"
+
+int random_int(int min, int max);
 
 enum class ObjectType {
     Generic = 0,
@@ -114,21 +117,20 @@ std::vector<Object> objects;
 inline std::vector<Object> get_rand_cubes(int divide_how_many_can_fit_by, int cube_size) {
     std::vector<Object> cubes;
     
-    const int TILE_SIZE = 50;
-    const int MARGIN = 200; // 200px margin from edges
+    const int MARGIN = 200;
     
     // Calculate effective area after removing margins
     int effective_width = PLAYING_AREA.width - (2 * MARGIN);
     int effective_height = PLAYING_AREA.height - (2 * MARGIN);
     
     // Calculate how many tiles fit in the effective area
-    int tiles_x = effective_width / TILE_SIZE;
-    int tiles_y = effective_height / TILE_SIZE;
+    int tiles_x = effective_width / CUBE_SIZE;
+    int tiles_y = effective_height / CUBE_SIZE;
     int total_tiles = tiles_x * tiles_y;
     
     int min_cubes = total_tiles / 10;  
     int max_cubes = total_tiles / 3;  
-    int num_cubes_to_spawn = GetRandomValue(min_cubes, max_cubes);
+    int num_cubes_to_spawn = random_int(min_cubes, max_cubes);
     
     // Define barrel position (umbrella barrel from constants)
     const int BARREL_SIZE = 50;
@@ -145,8 +147,8 @@ inline std::vector<Object> get_rand_cubes(int divide_how_many_can_fit_by, int cu
     for (int x = 0; x < tiles_x; x++) {
         for (int y = 0; y < tiles_y; y++) {
             // Calculate actual world position from tile coordinates (offset by margin)
-            float world_x = MARGIN + (x * TILE_SIZE);
-            float world_y = MARGIN + (y * TILE_SIZE);
+            float world_x = MARGIN + (x * CUBE_SIZE);
+            float world_y = MARGIN + (y * CUBE_SIZE);
             
             // Check if this tile would overlap with the barrel
             Rectangle tile_rect = {world_x, world_y, (float)cube_size, (float)cube_size};
@@ -159,7 +161,7 @@ inline std::vector<Object> get_rand_cubes(int divide_how_many_can_fit_by, int cu
     
     // Shuffle the available tiles to get random placement
     for (int i = available_tiles.size() - 1; i > 0; i--) {
-        int j = GetRandomValue(0, i);
+        int j = random_int(0, i);
         std::swap(available_tiles[i], available_tiles[j]);
     }
     
@@ -169,14 +171,14 @@ inline std::vector<Object> get_rand_cubes(int divide_how_many_can_fit_by, int cu
         int tile_y = available_tiles[i].second;
         
         // Calculate actual world position from tile coordinates (offset by margin)
-        float world_x = MARGIN + (tile_x * TILE_SIZE);
-        float world_y = MARGIN + (tile_y * TILE_SIZE);
+        float world_x = MARGIN + (tile_x * CUBE_SIZE);
+        float world_y = MARGIN + (tile_y * CUBE_SIZE);
         
         // Get random color
         Color color = {
-            (unsigned char)GetRandomValue(0, 255),
-            (unsigned char)GetRandomValue(0, 255),
-            (unsigned char)GetRandomValue(0, 255),
+            (unsigned char)random_int(0, 255),
+            (unsigned char)random_int(0, 255),
+            (unsigned char)random_int(0, 255),
             255
         };
         
@@ -256,7 +258,13 @@ void init_map_objects(Texture2D barrel_texture, Texture2D charger_texture) {
         },
         charger_texture,
         ObjectType::Charger
-    ));
-
-    
+    )); 
 }
+
+int random_int(int min, int max) {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<> dis(min, max);
+  return dis(gen);
+}
+

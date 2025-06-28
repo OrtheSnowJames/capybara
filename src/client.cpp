@@ -154,7 +154,7 @@ void handle_packet(int packet_type, std::string payload, Game *game,
         auto player = Player(value.as_table());
         (*game).players[player_id] = player;
       }
-      cubes = objects_from_table(data["cubes"].as_table(), res_man->getTex("assets/cube.png"));
+      cubes = objects_from_table(data["cubes"].as_table(), res_man->getTex("assets/floor_tile.png"));
       int current_event = data["current_event"].as_int();
       if (current_event == EventType::Darkness) {
         darkness_active = true;
