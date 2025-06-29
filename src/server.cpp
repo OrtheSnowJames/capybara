@@ -7,6 +7,7 @@
 #include "objects.hpp"
 #include "player.hpp"
 #include "utils.hpp"
+#include "rainanimation.hpp"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -35,14 +36,20 @@ std::mutex game_mutex;
 Game game;
 
 // bullet id 
-static std::atomic<int> next_bullet_id{0};
 std::mutex bullet_id_mutex;
+int current_bullet_id = 0;
 
 int get_next_bullet_id() {
     std::lock_guard<std::mutex> lock(bullet_id_mutex);
-    int id = next_bullet_id++;
-    if (next_bullet_id >= 10000) next_bullet_id = 0;
-    return id;
+    return current_bullet_id++;
+}
+
+std::mutex raindrop_id_mutex;
+int current_raindrop_id = 0;
+
+int get_next_raindrop_id() {
+    std::lock_guard<std::mutex> lock(raindrop_id_mutex);
+    return current_raindrop_id++;
 }
 
 std::mutex assassin_mutex;
@@ -83,6 +90,8 @@ std::set<int> previous_targets; // previous targets
 // cubes on the map
 std::vector<Object> cubes = get_rand_cubes(155, CUBE_SIZE);
 //std::vector<Object> cubes;
+
+// Raindrops are now part of game state (game.raindrops)
 // Lock order: game_mutex -> assassin_mutex -> pending_assassin_mutex ->
 // darkness_mutex -> acid_rain_mutex -> clients_mutex This order must be
 // maintained in all functions to prevent deadlocks
@@ -98,6 +107,11 @@ enum EventType {
 static std::vector<Rectangle> bullet_colliders;
 
 std::mutex objects_mutex;
+
+// Umbrella shooting cooldown system
+std::mutex umbrella_cooldown_mutex;
+std::map<int, std::chrono::steady_clock::time_point> umbrella_shoot_cooldowns;
+const float UMBRELLA_SHOOT_COOLDOWN = 0.15f; // 150ms between shots
 
 void clear_assassin_state_unlocked() {
   std::cout << "Clearing assassin state" << std::endl;
@@ -162,6 +176,32 @@ void shutdown_server(int signum) {
   std::cout << "\nSignal " << signum << " received. Starting shutdown..."
             << std::endl;
   server_running = false;
+}
+
+RainDrop raindrop_from_player(int player_id) {
+  RainDrop drop;
+  
+  // Only create raindrops for players with umbrella weapon
+  if (game.players[player_id].weapon_id != (int)Weapon::umbrella) {
+    return drop; // Return invalid drop
+  }
+  
+  // Calculate umbrella position when shooting (same as visual positioning)
+  float distance = 80.0f; // Distance from player center
+  float angle_rad = (game.players[player_id].rot - 90.0f) * DEG2RAD; // Convert to radians and adjust for up direction
+  
+  float umbrella_x = (game.players[player_id].x + 50) + cosf(angle_rad) * distance;
+  float umbrella_y = (game.players[player_id].y + 50) + sinf(angle_rad) * distance;
+  
+  drop.position.x = umbrella_x;
+  drop.position.y = umbrella_y;
+  drop.speed = 400.0f;
+  drop.size = 8.0f;
+  drop.rot = (game.players[player_id].rot - 90) * DEG2RAD;
+  drop.alpha = 1.0f;
+  drop.raindrop_id = get_next_raindrop_id();
+  
+  return drop;
 }
 
 void handle_client(int client, int id) {
@@ -901,6 +941,64 @@ void update_bullets() {
   }
 }
 
+void update_raindrops() {
+  std::scoped_lock locks(game_mutex, objects_mutex, clients_mutex);
+
+  auto it = game.raindrops.begin();
+  while (it != game.raindrops.end()) {
+    bool should_despawn = false;
+
+    // Move raindrop based on rotation
+    if (it->rot != 0) {
+      it->position.x += cosf(it->rot) * it->speed * 0.016f; // ~60fps
+      it->position.y += sinf(it->rot) * it->speed * 0.016f;
+    } else {
+      it->position.y += it->speed * 0.016f; // falling straight down
+    }
+
+    // Check map boundaries
+    if (it->position.x < -50 || it->position.x > PLAYING_AREA.width + 50 ||
+        it->position.y < -50 || it->position.y > PLAYING_AREA.height + 50) {
+      should_despawn = true;
+    }
+
+    // Check collisions with map objects (only for shot raindrops)
+    if (!should_despawn && it->rot != 0) {
+      Rectangle drop_rect = {it->position.x - it->size, it->position.y - it->size, 
+                            it->size * 2, it->size * 2};
+      
+      for (auto &obj : objects) {
+        if (obj.check_collision(drop_rect)) {
+          should_despawn = true;
+          break;
+        }
+      }
+
+      for (auto &cube : cubes) {
+        if (cube.check_collision(drop_rect)) {
+          should_despawn = true;
+          break;
+        }
+      }
+    }
+
+    if (should_despawn) {
+      // Send despawn message to all clients
+      std::string msg = netvent::serialize_to_netvent(
+          netvent::val(MSG_RAINDROP_DESPAWN),
+          std::map<std::string, netvent::Value>({
+              {"raindrop_id", netvent::val(it->raindrop_id)}
+          }));
+      broadcast_message(msg, clients);
+
+      // Remove raindrop
+      it = game.raindrops.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 int main() {
   int sock = create_socket(ADDRESS_FAMILY_INET, SOCKET_STREAM, 0);
   if (sock < 0) {
@@ -950,6 +1048,42 @@ int main() {
 
     // check pending assassins
     check_pending_assassins();
+
+    // add raindrops from players
+    {
+      std::lock_guard<std::mutex> cooldown_lock(umbrella_cooldown_mutex);
+      auto now = std::chrono::steady_clock::now();
+      
+      for (const auto &[player_id, player] : game.players) {
+        if (player.is_shooting && player.weapon_id == (int)Weapon::umbrella) {
+          // Check if cooldown has passed
+          auto last_shot_it = umbrella_shoot_cooldowns.find(player_id);
+          if (last_shot_it == umbrella_shoot_cooldowns.end() || 
+              std::chrono::duration<float>(now - last_shot_it->second).count() >= UMBRELLA_SHOOT_COOLDOWN) {
+            
+            RainDrop new_drop = raindrop_from_player(player_id);
+            if (new_drop.raindrop_id != -1) { // Valid raindrop created
+              game.raindrops.push_back(new_drop);
+              umbrella_shoot_cooldowns[player_id] = now;
+              
+              // Send raindrop spawn message to all clients
+              std::string msg = netvent::serialize_to_netvent(
+                  netvent::val(MSG_RAINDROP_SPAWN),
+                  std::map<std::string, netvent::Value>({
+                      {"raindrop_id", netvent::val(new_drop.raindrop_id)},
+                      {"x", netvent::val(new_drop.position.x)},
+                      {"y", netvent::val(new_drop.position.y)},
+                      {"speed", netvent::val(new_drop.speed)},
+                      {"size", netvent::val(new_drop.size)},
+                      {"rot", netvent::val(new_drop.rot)},
+                      {"alpha", netvent::val(new_drop.alpha)}
+                  }));
+              broadcast_message(msg, clients);
+            }
+          }
+        }
+      }
+    }
 
     // terminate disconnected clients
     std::list<int> to_remove;
@@ -1225,6 +1359,45 @@ int main() {
                 }
               }
             } break;
+            case 17: {
+              auto [event_name, data] =
+                  netvent::deserialize_from_netvent(payload);
+              if (event_name.as_int() == 17) {
+                int player_id = data["player_id"].as_int();
+                
+                std::scoped_lock locks(game_mutex, clients_mutex);
+                if (game.players.find(player_id) != game.players.end()) {
+                  game.players[player_id].is_shooting = true;
+                  game.players[player_id].rot = data["rot"].as_float();
+                  
+                  std::string out = netvent::serialize_to_netvent(
+                      netvent::val(17 /* MSG_UMBRELLA_SHOOT */),
+                      std::map<std::string, netvent::Value>(
+                          {{"player_id", netvent::val(player_id)},
+                           {"rot", netvent::val(data["rot"].as_float())}}));
+                  broadcast_message(out, clients, from_id);
+                }
+              }
+            } break;
+            case 18: {
+              auto [event_name, data] =
+                  netvent::deserialize_from_netvent(payload);
+              if (event_name.as_int() == 18) {
+                int player_id = data["player_id"].as_int();
+                
+                std::scoped_lock locks(game_mutex, clients_mutex);
+                if (game.players.find(player_id) != game.players.end()) {
+                  game.players[player_id].is_shooting = false;
+                  
+                  // Broadcast umbrella stop shooting state to all other clients
+                  std::string out = netvent::serialize_to_netvent(
+                      netvent::val(18 /* MSG_UMBRELLA_STOP */),
+                      std::map<std::string, netvent::Value>(
+                          {{"player_id", netvent::val(player_id)}}));
+                  broadcast_message(out, clients, from_id);
+                }
+              }
+            } break;
             default:
               std::cerr << "INVALID PACKET TYPE: " << packet_type << std::endl;
               break;
@@ -1238,6 +1411,7 @@ int main() {
 
     // update bullets
     update_bullets();
+    update_raindrops();
   }
 
   std::cout << "Main loop stopped. Starting cleanup..." << std::endl;

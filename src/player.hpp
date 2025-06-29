@@ -24,6 +24,7 @@ public:
   std::string username = std::string("unset");
   float rot = 0;
   int weapon_id = 0;  // 0 = gun or knife (default), 1 = flashlight, 2 = umbrella
+  bool is_shooting = false; // SHOOTING THE UMBRELLA
 
   Player(int x, int y) : x(x), y(y), nx(x), ny(y) {}
 
@@ -39,6 +40,7 @@ public:
     weapon_id = tbl[netvent::val("weapon_id")].as_int();
     rot = tbl[netvent::val("rot")].as_float();
     color = color_from_table(tbl[netvent::val("color")].as_table());
+    is_shooting = tbl[netvent::val("is_shooting")].as_bool();
   }
 
   netvent::Table to_table(int id) {
@@ -49,7 +51,8 @@ public:
       {"username", netvent::val(this->username)},
       {"weapon_id", netvent::val(this->weapon_id)},
       {"rot", netvent::val(this->rot)},
-      {"color", netvent::val(color_to_table(this->color))}
+      {"color", netvent::val(color_to_table(this->color))},
+      {"is_shooting", netvent::val(this->is_shooting)}
     });
   }
 

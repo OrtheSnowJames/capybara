@@ -6,11 +6,14 @@
 #include <algorithm>
 #include <vector>
 
+// Forward declaration to avoid circular dependency
+struct RainDrop;
 
 class Game {
 public:
   playermap players;
   std::vector<Bullet> bullets;
+  std::vector<RainDrop> raindrops;
 
   void update_bullets(Camera2D cam, int my_id) {
     for (Bullet &b : this->bullets) {

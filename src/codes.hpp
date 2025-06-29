@@ -11,3 +11,7 @@ inline const int MSG_EVENT_SUMMON = 11;      // changed
 inline const int MSG_SWITCH_WEAPON = 12;     // changed
 inline const int MSG_ASSASSIN_CHANGE = 15;   // changed
 inline const int MSG_BULLET_DESPAWN = 16;    // changed
+inline const int MSG_UMBRELLA_SHOOT = 17;    // changed
+inline const int MSG_UMBRELLA_STOP = 18;     // changed
+inline const int MSG_RAINDROP_SPAWN = 19;    // new
+inline const int MSG_RAINDROP_DESPAWN = 20;  // new

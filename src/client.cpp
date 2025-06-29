@@ -81,7 +81,8 @@ static AcidRainEvent acid_rain;
 
 // umbrella
 static Umbrella player_umbrella;
-static bool umbrella_usable = true;
+static UmbrellaUpdateData umbrella_update_data;
+static UmbrellaUpdateData umbrella_update_data_last_frame;
 
 // umbrella barrel
 const int BARREL_SIZE = 50;
@@ -137,6 +138,8 @@ enum EventType {
   AcidRain = 3,
   NOTHING = 100
 };
+
+
 
 void handle_packet(int packet_type, std::string payload, Game *game,
                    int *my_id, ResourceManager *res_man) {
@@ -377,8 +380,77 @@ void handle_packet(int packet_type, std::string payload, Game *game,
       if (player_id != *my_id) {
         game->players[player_id].weapon_id = weapon_id;
       }
+
+      if (weapon_id == Weapon::umbrella) {
+        game->players[player_id].rot = 0;
+      }
     }
   } break;
+  case MSG_UMBRELLA_SHOOT: {
+    auto [event_name, data] = netvent::deserialize_from_netvent(payload);
+    if (event_name.as_int() == MSG_UMBRELLA_SHOOT) {
+      int player_id = data["player_id"].as_int();
+      float rot = data["rot"].as_float();
+      game->players[player_id].rot = rot; 
+
+      game->players[player_id].is_shooting = true;
+    }
+  }
+  case MSG_UMBRELLA_STOP: {
+    auto [event_name, data] = netvent::deserialize_from_netvent(payload);
+    if (event_name.as_int() == MSG_UMBRELLA_STOP) {
+      int player_id = data["player_id"].as_int();
+      game->players[player_id].is_shooting = false;
+    }
+  } break;
+  case MSG_RAINDROP_SPAWN: {
+    auto [event_name, data] = netvent::deserialize_from_netvent(payload);
+    if (event_name.as_int() == MSG_RAINDROP_SPAWN) {
+      int raindrop_id = data["raindrop_id"].as_int();
+      float x = data["x"].as_float();
+      float y = data["y"].as_float();
+      float speed = data["speed"].as_float();
+      float size = data["size"].as_float();
+      float rot = data["rot"].as_float();
+      float alpha = data["alpha"].as_float();
+
+      RainDrop drop;
+      drop.position.x = x;
+      drop.position.y = y;
+      drop.speed = speed;
+      drop.size = size;
+      drop.rot = rot;
+      drop.alpha = alpha;
+      drop.raindrop_id = raindrop_id;
+      
+      game->raindrops.push_back(drop);
+      
+      std::cout << "Client: Received raindrop " << raindrop_id << " at (" << x << ", " << y << ")" << std::endl;
+    }
+    break;
+  }
+  case MSG_RAINDROP_DESPAWN: {
+    auto [event_name, data] = netvent::deserialize_from_netvent(payload);
+    if (event_name.as_int() == MSG_RAINDROP_DESPAWN) {
+      int raindrop_id = data["raindrop_id"].as_int();
+
+      size_t before_size = game->raindrops.size();
+      auto new_end = std::remove_if(game->raindrops.begin(),
+                                   game->raindrops.end(),
+                                   [raindrop_id](const RainDrop &r) {
+                                     return r.raindrop_id == raindrop_id;
+                                   });
+      game->raindrops.erase(new_end, game->raindrops.end());
+      size_t after_size = game->raindrops.size();
+
+      if (before_size != after_size) {
+        std::cout << "Client: Removed raindrop " << raindrop_id << std::endl;
+      } else {
+        std::cout << "Client: Warning - Tried to remove non-existent raindrop " << raindrop_id << std::endl;
+      }
+    }
+    break;
+  }
   }
 }
 
@@ -885,9 +957,8 @@ void draw_players(playermap players, std::vector<Bullet> bullets,
     case umbrella:
       if (id == my_id) {
         player_umbrella.is_active = true;
-        player_umbrella.draw(res_man, p.x, p.y);
+        player_umbrella.draw(res_man, p.x, p.y, p.rot);
       } else {
-        // Draw other players' umbrellas with hit detection
         Color umbrella_tint = WHITE;
         for (const Bullet &b : bullets) {
           Rectangle umbrella_rect = {(float)p.x, (float)p.y - 85, 75, 75};
@@ -899,11 +970,28 @@ void draw_players(playermap players, std::vector<Bullet> bullets,
           }
         }
 
-        // Draw other players' umbrellas without state tracking
+        float umbrella_x, umbrella_y;
+        float umbrella_rotation;
+        
+        if (p.is_shooting) {
+          // When shooting, position umbrella around the player based on rotation
+          float distance = 80.0f; // Distance from player center
+          float angle_rad = (p.rot - 90.0f) * DEG2RAD; // Convert to radians and adjust for up direction
+          
+          umbrella_x = (p.x + 50) + cosf(angle_rad) * distance;
+          umbrella_y = (p.y + 50) + sinf(angle_rad) * distance;
+          umbrella_rotation = p.rot;
+        } else {
+          // When not shooting, position umbrella above the player (default position)
+          umbrella_x = p.x + 50;
+          umbrella_y = p.y - 35;
+          umbrella_rotation = 0.0f;
+        }
+        
         DrawTexturePro(res_man->getTex("assets/umbrella.png"),
                        {(float)0, (float)0, 16, 16},
-                       {(float)p.x + 50, (float)p.y - 35, 75, 75},
-                       {(float)37.5, (float)60}, 0, umbrella_tint);
+                       {umbrella_x, umbrella_y, 75, 75},
+                       {(float)37.5, (float)37.5}, umbrella_rotation, umbrella_tint);
       }
       break;
     default:
@@ -930,6 +1018,31 @@ bool move_wpn(float *rot, int cx, int cy, Camera2D cam, float scale,
   float oldrot = *rot;
   *rot = fmod(angle + 360.0f, 360.0f);
 
+  return *rot == oldrot;
+}
+
+bool move_umbrella(float *rot, int cx, int cy, Camera2D cam, float scale,
+                   float offsetX, float offsetY) {
+  // mouse position in window
+  Vector2 windowMouse = GetMousePosition();
+
+  // mouse position in render texture
+  Vector2 renderMouse = {(windowMouse.x - offsetX) / scale,
+                         (windowMouse.y - offsetY) / scale};
+
+  // mouse position in world space
+  Vector2 mousePos = GetScreenToWorld2D(renderMouse, cam);
+  Vector2 playerCenter = {(float)cx + 50, (float)cy + 50};
+
+  // Calculate direction from player to mouse
+  Vector2 delta = Vector2Subtract(mousePos, playerCenter);
+  float angle = atan2f(delta.y, delta.x) * RAD2DEG;
+  float oldrot = *rot;
+  
+  // Since umbrella sprite faces up (0 degrees), we need to adjust the angle
+  // Add 90 degrees to align with the sprite's natural orientation
+  *rot = fmod(angle + 90.0f + 360.0f, 360.0f);
+  
   return *rot == oldrot;
 }
 
@@ -1160,7 +1273,7 @@ int main(int argc, char **argv) {
     update_darkness_effect();
 
     // update acid rain
-    acid_rain.update(GetFrameTime());
+    acid_rain.update(GetFrameTime(), game.players);
 
     // Put here to make sure id exists
     int cx = game.players[my_id].x;
@@ -1192,6 +1305,9 @@ int main(int argc, char **argv) {
     } else if (game.players[my_id].weapon_id == Weapon::flashlight) {
       moved_gun = move_flashlight(&game.players[my_id].rot, cx, cy, cam, scale,
                                   offsetX, offsetY);
+    } else if (game.players[my_id].weapon_id == Weapon::umbrella && umbrella_update_data.is_shooting) {
+      moved_gun = move_umbrella(&game.players[my_id].rot, cx, cy, cam, scale,
+                                offsetX, offsetY);
     }
     hasmoved = moved || moved_gun;
 
@@ -1208,6 +1324,18 @@ int main(int argc, char **argv) {
     }
 
     game.update(my_id, cam);
+
+    for (RainDrop &drop : game.raindrops) {
+      if (drop.rot != 0) {
+        drop.position.x += cosf(drop.rot) * drop.speed * GetFrameTime();
+        drop.position.y += sinf(drop.rot) * drop.speed * GetFrameTime();
+      } else {
+        drop.position.y += drop.speed * GetFrameTime(); // falling straight down
+      }
+      
+      // Fade out over time
+      drop.alpha = std::max(0.0f, drop.alpha - GetFrameTime() * 0.5f);
+    }
 
     if (!canshoot)
       bdelay--;
@@ -1275,7 +1403,7 @@ int main(int argc, char **argv) {
       } else if (IsKeyPressed(KEY_TWO) && flashlight_usable) {
         currentWeapon = Weapon::flashlight;
         weapon_changed = true;
-      } else if (IsKeyPressed(KEY_THREE) && umbrella_usable) {
+      } else if (IsKeyPressed(KEY_THREE) && umbrella_update_data.is_usable) {
         currentWeapon = Weapon::umbrella;
         weapon_changed = true;
       }
@@ -1306,19 +1434,41 @@ int main(int argc, char **argv) {
           bool is_umbrella_equipped =
               game.players[my_id].weapon_id == (int)Weapon::umbrella;
 
-          umbrella_usable =
+          umbrella_update_data =
               player_umbrella.update(obj.bounds, player_rect, bullets_rects,
-                                     active_bullets, is_umbrella_equipped);
+                                     active_bullets, is_umbrella_equipped, game.players[my_id].rot, acid_rain.is_active());
 
           break;
         }
       }
 
-      if (!umbrella_usable &&
+      if (!umbrella_update_data.is_usable &&
           game.players[my_id].weapon_id == (int)Weapon::umbrella) {
         switch_weapon(Weapon::gun_or_knife, &game, my_id, sock,
                       flashlight_usable);
       }
+
+
+      if (umbrella_update_data.is_shooting && !umbrella_update_data_last_frame.is_shooting) {
+        game.players[my_id].is_shooting = true;
+        
+        // tell the server we are shooting the umbrella
+        std::string msg = netvent::serialize_to_netvent(
+            netvent::val((int)MSG_UMBRELLA_SHOOT),
+            std::map<std::string, netvent::Value>({{"player_id", netvent::val(my_id)}, {"rot", netvent::val(game.players[my_id].rot)}}));
+        send_message(msg, sock);
+      }
+
+      if (!umbrella_update_data.is_shooting && umbrella_update_data_last_frame.is_shooting) {
+        game.players[my_id].is_shooting = false;
+        
+        // tell the server we are not shooting the umbrella
+        std::string msg = netvent::serialize_to_netvent(
+            netvent::val((int)MSG_UMBRELLA_STOP),
+            std::map<std::string, netvent::Value>({{"player_id", netvent::val(my_id)}}));
+        send_message(msg, sock);
+      }
+      umbrella_update_data_last_frame = umbrella_update_data;
     }
 
     // draw to render texture
@@ -1382,6 +1532,29 @@ int main(int argc, char **argv) {
 
     for (Bullet &b : game.bullets)
       b.show();
+
+    for (const RainDrop &drop : game.raindrops) {
+      Color dropColor = {0, 255, 0, (unsigned char)(drop.alpha * 255)}; // Green with alpha
+      DrawCircle(drop.position.x, drop.position.y, drop.size, dropColor);
+      
+      // Draw trail based on movement direction
+      float trailLength = drop.speed * 0.05f;
+      Vector2 trailEnd;
+      
+      if (drop.rot != 0) {
+        // Shot raindrop - trail follows shot direction
+        trailEnd = {
+          drop.position.x - cosf(drop.rot) * trailLength,
+          drop.position.y - sinf(drop.rot) * trailLength
+        };
+      } else {
+        // Normal raindrop - trail goes straight up
+        trailEnd = {drop.position.x, drop.position.y - trailLength};
+      }
+      
+      Color trailColor = {0, 255, 0, (unsigned char)(drop.alpha * 128)}; // More transparent trail
+      DrawLineEx(drop.position, trailEnd, drop.size * 0.5f, trailColor);
+    }
 
     // Draw acid rain effect
     acid_rain.draw(game.players);
