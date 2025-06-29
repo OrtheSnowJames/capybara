@@ -176,4 +176,25 @@ void DrawTextureAlpha(Texture2D texture, int x, int y, unsigned char alpha) {
   DrawTexture(texture, x, y, tint);
 }
 
+void DrawTextureAlphaHalfCutOff(Texture2D texture, int x, int y, unsigned char alpha, int divisor = 2) {
+  Color tint = Color{255, 255, 255, alpha};
+  // draw the texture but only the top half of it
+  DrawTexturePro(
+    texture,
+    {(float)0, (float)0, (float)texture.width, (float)texture.height/divisor},
+    {(float)x, (float)y, (float)texture.width, (float)texture.height/divisor},
+    {0, 0},
+    0,
+    tint
+  );
+}
+
+void SwimDrawPlayer(Texture2D texture, int x, int y, unsigned char alpha, bool swim_mode, int divisor = 2) {
+  if (swim_mode) {
+    DrawTextureAlphaHalfCutOff(texture, x, y, alpha, divisor);
+  } else {
+    DrawTextureAlpha(texture, x, y, alpha);
+  }
+}
+
 #endif

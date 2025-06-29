@@ -100,6 +100,77 @@ std::vector<Object> cubes;
 // move state
 CanMoveState can_move_state = {false, false, false, false};
 
+// water mode
+static bool water_mode = false;
+
+// Water ripples system
+struct WaterRipple {
+  Vector2 position;
+  float radius;
+  float max_radius;
+  float alpha;
+  float lifetime;
+};
+
+static std::vector<WaterRipple> water_ripples;
+static std::map<int, Vector2> last_player_positions;
+static std::map<int, float> player_ripple_cooldowns;
+
+void create_water_ripple(Vector2 position) {
+  if (!water_mode) return;
+  
+  WaterRipple ripple;
+  ripple.position = position;
+  ripple.radius = 2.0f;
+  ripple.max_radius = 60.0f + GetRandomValue(-15, 15); 
+  ripple.alpha = 1.0f; 
+  ripple.lifetime = 3.0f; 
+  
+  water_ripples.push_back(ripple);
+}
+
+void update_water_ripples(float deltaTime) {
+  if (!water_mode) {
+    water_ripples.clear();
+    return;
+  }
+  
+  for (auto it = water_ripples.begin(); it != water_ripples.end();) {
+    it->lifetime -= deltaTime;
+    it->radius += deltaTime * 30.0f; 
+    it->alpha = (it->lifetime / 2.0f) * 0.8f; 
+    
+    if (it->lifetime <= 0.0f || it->radius >= it->max_radius) {
+      it = water_ripples.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void draw_water_ripples() {
+  if (!water_mode) return;
+  
+  for (const auto& ripple : water_ripples) {
+    Color ripple_color = {255, 255, 255, (unsigned char)(ripple.alpha * 255)};
+    
+    // Draw multiple concentric circles for better visibility
+    DrawCircleLines(ripple.position.x, ripple.position.y, ripple.radius, ripple_color);
+    DrawCircleLines(ripple.position.x, ripple.position.y, ripple.radius + 1, ripple_color);
+    
+    if (ripple.radius > 8.0f) {
+      Color inner_ripple_color = {200, 200, 255, (unsigned char)(ripple.alpha * 180)};
+      DrawCircleLines(ripple.position.x, ripple.position.y, ripple.radius - 4.0f, inner_ripple_color);
+      DrawCircleLines(ripple.position.x, ripple.position.y, ripple.radius - 3.0f, inner_ripple_color);
+    }
+    
+    if (ripple.radius > 15.0f) {
+      Color center_ripple_color = {150, 150, 255, (unsigned char)(ripple.alpha * 120)};
+      DrawCircleLines(ripple.position.x, ripple.position.y, ripple.radius - 8.0f, center_ripple_color);
+    }
+  }
+}
+
 void do_recv() {
   char buffer[1024];
 
@@ -136,6 +207,7 @@ enum EventType {
   Assasin = 1,
   Clear = 2,
   AcidRain = 3,
+  Swim = 4,
   NOTHING = 100
 };
 
@@ -254,10 +326,19 @@ void handle_packet(int packet_type, std::string payload, Game *game,
           std::cout << "Received acid rain event: " << payload << std::endl;
           acid_rain.start(0.0f);
           break;
+        case Swim:
+          std::cout << "Received swim event: " << payload << std::endl;
+          water_mode = true;
+          break;
         case Clear:
           std::cout << "Received clear event: " << payload << std::endl;
           darkness_active = false;
           acid_rain.stop();
+          water_mode = false;
+          // Clear water ripples when leaving water mode
+          water_ripples.clear();
+          last_player_positions.clear();
+          player_ripple_cooldowns.clear();
           break;
       }
     }
@@ -860,25 +941,37 @@ void draw_players(playermap players, std::vector<Bullet> bullets,
     // player and aren't visible due to range
     if (p.username == "unset")
       continue;
+  
+    if (water_mode) {
+      Vector2 playerPos = {(float)p.x + 50, (float)p.y + 25};
+
+      DrawCircle(playerPos.x, playerPos.y, 90, Color{100, 100, 255, 40});  
+      DrawCircle(playerPos.x, playerPos.y, 65, Color{50, 50, 255, 50});   
+      DrawCircle(playerPos.x, playerPos.y, 40, Color{0, 0, 255, 60});     
+    }
 
     if (!color_equal(p.color, INVISIBLE) || id == my_id) {
       Color shadow_color = {0, 0, 0, 80};
       float shadow_width = 80;
       float shadow_height = 30;
       float shadow_y_offset = 90;
-      DrawEllipse(p.x + 50, p.y + shadow_y_offset, shadow_width/2, shadow_height/2, shadow_color);
+      if (!water_mode) {
+        DrawEllipse(p.x + 50, p.y + shadow_y_offset, shadow_width/2, shadow_height/2, shadow_color);
+      } else {
+        // draw the outline of the shadow
+        DrawEllipse(p.x + 50, (p.y + shadow_y_offset / 1.5) - PLAYER_SIZE / 2, shadow_width/2, shadow_height/2, Color{255, 255, 255, 100});
+      }
 
       Color clr = p.color;
       if (id == my_id && is_assassin) {
-        DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color),
-                         p.x, p.y, 128);
+        SwimDrawPlayer(res_man->load_player_texture_from_color(my_true_color),
+                         p.x, p.y, 128, water_mode);
       } else if (id == my_id && color_equal(p.color, INVISIBLE)) {
         // draw with transparency using the original color
-        DrawTextureAlpha(res_man->load_player_texture_from_color(my_true_color),
-                         p.x, p.y, 128);
+        SwimDrawPlayer(res_man->load_player_texture_from_color(my_true_color),
+                         p.x, p.y, 128, water_mode);
       } else {
-        DrawTexture(res_man->load_player_texture_from_color(clr), p.x, p.y,
-                    WHITE);
+        SwimDrawPlayer(res_man->load_player_texture_from_color(clr), p.x, p.y, 128, water_mode);
       }
 
       DrawText(p.username.c_str(),
@@ -1208,6 +1301,7 @@ int main(int argc, char **argv) {
   RenderTexture2D shadowMask = LoadRenderTexture(window_size.x, window_size.y);
   // Create light texture for darkness effect once
   Texture2D lightTex = {0};
+  Texture2D waterDepthTex = {0};
   {
     int size = 400;
     Image lightImg = GenImageColor(size, size, Color{0, 0, 0, 0});
@@ -1234,9 +1328,34 @@ int main(int argc, char **argv) {
 
     lightTex = LoadTextureFromImage(lightImg);
     UnloadImage(lightImg);
+    
+    // Create water depth texture (dark blue gradient)
+    Image waterDepthImg = GenImageColor(size, size, Color{0, 0, 0, 0});
+    
+    for (int y = 0; y < size; y++) {
+      for (int x = 0; x < size; x++) {
+        float dx = x - center;
+        float dy = y - center;
+        float distance = sqrtf(dx * dx + dy * dy);
+
+        if (distance <= max_radius) {
+          float alpha_factor = 1.0f - (distance / max_radius); // Inverted from light
+          alpha_factor = alpha_factor * alpha_factor; // Smooth curve
+          unsigned char alpha = (unsigned char)(180.0f * alpha_factor); // Dark blue intensity
+
+          Color pixel_color = {0, 50, 120, alpha}; // Dark blue color
+          ImageDrawPixel(&waterDepthImg, x, y, pixel_color);
+        }
+      }
+    }
+
+    waterDepthTex = LoadTextureFromImage(waterDepthImg);
+    UnloadImage(waterDepthImg);
   }
 
   RenderTexture2D darknessMask =
+      LoadRenderTexture(window_size.x, window_size.y);
+  RenderTexture2D waterDepthMask =
       LoadRenderTexture(window_size.x, window_size.y);
   Image lightImg = GenImageGradientRadial(256, 256, 0.0f, WHITE, BLANK);
   lightTex = LoadTextureFromImage(lightImg);
@@ -1281,6 +1400,44 @@ int main(int argc, char **argv) {
 
     move_camera(&cam, cx, cy);
 
+    update_water_ripples(GetFrameTime());
+    
+    float deltaTime = GetFrameTime();
+    for (auto& [player_id, cooldown] : player_ripple_cooldowns) {
+      cooldown -= deltaTime;
+    }
+    
+    // ripple generation
+    if (water_mode) {
+      for (const auto& [id, player] : game.players) {
+        if (player.username == "unset") continue;
+        
+        Vector2 current_pos = {(float)player.x + 25, (float)player.y + 25}; // Center of player
+        
+        if (last_player_positions.count(id)) {
+          Vector2 last_pos = last_player_positions[id];
+          float distance = Vector2Distance(current_pos, last_pos);
+          
+          // Check if cooldown has expired (or doesn't exist yet)
+          bool can_create_ripple = player_ripple_cooldowns[id] <= 0.0f;
+          
+          if (distance > 0.5f && can_create_ripple) {
+            create_water_ripple(current_pos);
+            // Set cooldown to prevent spam (0.2 seconds between ripples)
+            player_ripple_cooldowns[id] = 1.2f;
+            
+            Vector2 direction = Vector2Normalize(Vector2Subtract(current_pos, last_pos));
+            for (int i = 1; i < (int)(distance / 5.0f); i++) {
+              Vector2 trail_pos = Vector2Add(last_pos, Vector2Scale(direction, i * 5.0f));
+              create_water_ripple(trail_pos);
+            }
+          }
+        }
+        
+        last_player_positions[id] = current_pos;
+      }
+    }
+
     if (!usernamechosen) {
       manage_username_prompt(&(game.players), my_id, options, &g_conf);
       game.players[my_id].username = g_conf.username;
@@ -1292,7 +1449,7 @@ int main(int argc, char **argv) {
 
     can_move_state = update_can_move_state(Rectangle{(float)game.players.at(my_id).x, (float)game.players.at(my_id).y, (float)PLAYER_SIZE, (float)PLAYER_SIZE}, cubes, PLAYER_SIZE, 0.1f, Rectangle{0, 0, (float)PLAYING_AREA.width, (float)PLAYING_AREA.height});
 
-    bool moved = game.players.at(my_id).move(can_move_state);
+    bool moved = game.players.at(my_id).move(can_move_state, water_mode);
 
     float scaledWidth = window_size.x * scale;
     float scaledHeight = window_size.y * scale;
@@ -1473,17 +1630,19 @@ int main(int argc, char **argv) {
 
     // draw to render texture
     BeginTextureMode(target);
-    ClearBackground(BLUE);
+    ClearBackground(Color{100, 100, 255, 255}); // light blue
 
     BeginMode2D(cam);
 
-    // Draw floor tiles based on PLAYING_AREA
-    for (int i = 0; i < PLAYING_AREA.width / TILE_SIZE; i++) {
-      for (int j = 0; j < PLAYING_AREA.height / TILE_SIZE; j++) {
-        if (isInViewport(i * TILE_SIZE, j * TILE_SIZE, TILE_SIZE, TILE_SIZE,
-                         cam))
-          DrawTexture(res_man.getTex("assets/floor_tile.png"), i * TILE_SIZE,
-                      j * TILE_SIZE, WHITE);
+    // Draw floor tiles based on PLAYING_AREA if not in water mode
+    if (!water_mode) {
+      for (int i = 0; i < PLAYING_AREA.width / TILE_SIZE; i++) {
+        for (int j = 0; j < PLAYING_AREA.height / TILE_SIZE; j++) {
+          if (isInViewport(i * TILE_SIZE, j * TILE_SIZE, TILE_SIZE, TILE_SIZE,
+                          cam))
+            DrawTexture(res_man.getTex("assets/floor_tile.png"), i * TILE_SIZE,
+                        j * TILE_SIZE, WHITE);
+        }
       }
     }
 
@@ -1501,6 +1660,8 @@ int main(int argc, char **argv) {
 
     // draw cubes
     cube_loop(cubes, cam, &res_man);
+
+    draw_water_ripples();
 
     // draw umbrella barrel
     // if any player is touching the barrel, tint it green
@@ -1652,7 +1813,7 @@ int main(int argc, char **argv) {
           player_umbrella.is_active;
       Color tint = has_active_umbrella
                        ? Color{0, 0, 0, 0}
-                       : Color{0, 40, 0, 80}; // Subtle green overlay
+                       : Color{0, 40, 0, 80}; 
 
       DrawRectangle(0, 0, window_size.x, window_size.y, tint);
 
@@ -1689,8 +1850,12 @@ int main(int argc, char **argv) {
   UnloadRenderTexture(target);
   UnloadRenderTexture(shadowMask);
   UnloadRenderTexture(darknessMask);
+  UnloadRenderTexture(waterDepthMask);
   if (lightTex.id != 0) {
     UnloadTexture(lightTex);
+  }
+  if (waterDepthTex.id != 0) {
+    UnloadTexture(waterDepthTex);
   }
   std::cout << "Closing.\n";
 

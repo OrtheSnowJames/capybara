@@ -87,13 +87,17 @@ std::map<int, std::chrono::steady_clock::time_point> pending_assassins;
 
 std::set<int> previous_targets; // previous targets
 
+// swim
+std::mutex swim_mutex;
+bool water_mode = false;
+
 // cubes on the map
 std::vector<Object> cubes = get_rand_cubes(155, CUBE_SIZE);
 //std::vector<Object> cubes;
 
 // Raindrops are now part of game state (game.raindrops)
 // Lock order: game_mutex -> assassin_mutex -> pending_assassin_mutex ->
-// darkness_mutex -> acid_rain_mutex -> clients_mutex This order must be
+// darkness_mutex -> acid_rain_mutex -> swim_mutex -> clients_mutex This order must be
 // maintained in all functions to prevent deadlocks
 
 enum EventType {
@@ -101,6 +105,7 @@ enum EventType {
   Assasin = 1,
   Clear = 2,
   AcidRain = 3,
+  Swim = 4,
   NOTHING = 100
 };
 
@@ -647,7 +652,17 @@ void summon_event(int delay, EventType event_type = EventType::NOTHING) {
     }
     break;
   }
-  };
+  case EventType::Swim: {
+    std::scoped_lock locks(swim_mutex, clients_mutex);
+    if (!water_mode) {
+      water_mode = true;
+
+      std::string res = netvent::serialize_to_netvent(netvent::val(MSG_EVENT_SUMMON), std::map<std::string, netvent::Value>({{"event_type", netvent::val(EventType::Swim)}}));
+      broadcast_message(res, clients);
+    }
+    break;
+  }
+};
 }
 
 void event_worker() {
@@ -786,6 +801,8 @@ void handle_stdin_commands() {
       summon_event(0, EventType::Clear);
     } else if (command == "acid_rain") {
       summon_event(0, EventType::AcidRain);
+    } else if (command == "swim") {
+      summon_event(0, EventType::Swim);
     } else {
       std::cout << "Unknown command: " << command << std::endl;
     }

@@ -7,6 +7,8 @@
 #include "clrfn.hpp"
 #include "collision.hpp"
 
+const float BOBBING_OFFSET_MAX = 15.0f;
+
 enum Weapon {
   gun_or_knife = 0,
   flashlight = 1,
@@ -21,6 +23,10 @@ public:
   int ny = 0;
   int speed = 2;
   Color color = RED;
+
+  float bobbing_offset = 0.0f;
+  bool bobbing_up = true;
+
   std::string username = std::string("unset");
   float rot = 0;
   int weapon_id = 0;  // 0 = gun or knife (default), 1 = flashlight, 2 = umbrella
@@ -56,7 +62,13 @@ public:
     });
   }
 
-  bool move(CanMoveState can_move_state) {
+  bool move(CanMoveState can_move_state, bool swim_mode) {
+    if (swim_mode) {
+      speed = 1;
+    } else {
+      speed = 2;
+    }
+
     bool out = IsKeyDown(KEY_W) || IsKeyDown(KEY_A) || IsKeyDown(KEY_S) ||
                IsKeyDown(KEY_D);
     int dir_x = 0;
@@ -71,6 +83,9 @@ public:
     if (IsKeyDown(KEY_D) && can_move_state.right)
       dir_x += speed;
 
+    if (swim_mode && out) {
+      bob(swim_mode);
+    }
     // Check boundaries before moving
     int new_x = this->x + dir_x;
     int new_y = this->y + dir_y;
@@ -83,6 +98,22 @@ public:
     }
 
     return out;
+  }
+
+  void bob(bool swim_mode) {
+    if (swim_mode) {
+      if (bobbing_up) {
+        bobbing_offset += 0.1f;
+      } else {
+        bobbing_offset -= 0.1f;
+      }
+
+      if (bobbing_offset >= BOBBING_OFFSET_MAX) {
+        bobbing_up = false;
+      } else if (bobbing_offset <= -BOBBING_OFFSET_MAX) {
+        bobbing_up = true;
+      }
+    }
   }
 };
 
